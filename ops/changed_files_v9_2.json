@@ -1,0 +1,17 @@
+{
+  "version": "A_SHARE_V9_2_2026_09_28",
+  "files": {
+    "VERSION.txt": "d74ac1f47bff14cda7445cdd6379635a2ddd293b1a8ec9b55207ad94dba83dfd",
+    "README.md": "fb96b49891504335efa381b523f4ac7a60170752521b1c6e790f20e3a0773724",
+    "config/live.example.json": "6270f10a4ccb6999dfcec7bf7fe3598fd619654dea1c31916dd1b3a1bdba02e9",
+    "docs/Mac启动与V9_2升级.md": "b703c35874442efbcf97b6a3473f1ca900ef573ea33c190400c57f75008b01c2",
+    "docs/实盘操作指南.md": "8e2f9ed5af682e9c352d9dfc8a3b7337f790cd6ec51b8a8ca7f72d3eeaaf9cda",
+    "docs/审计与修复记录.md": "29457e9cbff3c7b646e16281a2e73ee36fc1c01dc9cdde6cea709d3e97606a89",
+    "live.py": "17df08fe0aceb37f0c966d690e12dbc68f229c5ba1345d6c151f84f57e487b72",
+    "src/live_v8.py": "fe1f1a9a80e5538dc1376edb531a4141345da0152189eb4e25e1c74600590d30",
+    "src/order_journal_v8.py": "9f4996db1246def208a0cd91033f90c50099b91a8aba00baf68225f1e7dca096",
+    "tests/test_v9_2_live_safety.py": "f47707a4fcc9cbd83bdb55e01a1b1fc0d876808995d7630ead31d6c26c158a19",
+    "ops/validation_junit_v9_2.xml": "a0ccfd9bc5a3570eca3d193ce804ac2951de63663f51d8d7cf4de7e46255585e",
+    "ops/validation_results.json": "5736fb4ae47e73c20f64669fc509715269b64d20f0b04ad8ea184572180cadc3"
+  }
+}

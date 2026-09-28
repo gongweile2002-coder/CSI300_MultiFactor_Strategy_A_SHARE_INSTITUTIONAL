@@ -1,0 +1,6 @@
+check,status,details
+software_tests,PASS,136 offline tests
+real_market_data,NOT_VERIFIED,Requires authorized complete market data
+broker_connection,NOT_VERIFIED,Requires user broker Windows environment
+live_submission,DISABLED,Default configuration
+performance,NOT_VERIFIED,Code tests do not establish investment results
