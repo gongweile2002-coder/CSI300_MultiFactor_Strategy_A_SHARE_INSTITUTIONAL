@@ -1,0 +1,3 @@
+ticker,name,category,tracking_index,enabled
+, ,broad_market,,true
+, ,sector,,true
