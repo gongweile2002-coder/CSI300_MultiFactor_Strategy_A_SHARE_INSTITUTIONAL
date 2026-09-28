@@ -1,0 +1,6 @@
+{
+  "as_of": "REPLACE_WITH_PREVIOUS_TRADING_DATE",
+  "prior_close_nav_adjusted": null,
+  "high_water_nav_adjusted": null,
+  "instruction": "填入真实券商净资产，出入金按同一口径调整昨收与历史高水位；不能每天重置高水位以绕过回撤限制。"
+}
