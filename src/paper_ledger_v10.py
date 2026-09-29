@@ -21,7 +21,11 @@ def _json_dumps(value: Any) -> str:
 def _frame_records(frame: pd.DataFrame | None) -> list[dict[str, Any]]:
     if frame is None or frame.empty:
         return []
-    return json.loads(frame.to_json(orient="records", date_format="iso", double_precision=15))
+    x = frame.copy()
+    for col in x.columns:
+        if pd.api.types.is_datetime64_any_dtype(x[col]):
+            x[col] = pd.to_datetime(x[col], errors="raise").dt.strftime("%Y-%m-%d")
+    return json.loads(x.to_json(orient="records", date_format="iso", double_precision=15))
 
 
 def signal_bundle_hash(frame: pd.DataFrame, signal_date) -> str:
