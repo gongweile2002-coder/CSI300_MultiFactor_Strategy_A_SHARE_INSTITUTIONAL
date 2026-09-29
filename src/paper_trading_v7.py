@@ -344,6 +344,7 @@ def execute_orders(
     min_commission_cny=5.0,
     slippage_bps=2.0,
     enforce_t_plus_one=True,
+    price_limits=None,
 ):
     """
     Paper execution only. It does NOT send orders to a broker.
@@ -376,8 +377,34 @@ def execute_orders(
         if pd.isna(ref) or float(ref) <= 0:
             continue
 
+        raw_execution_price = float(ref)
         slip = float(slippage_bps)/10000.0
-        fill_price = float(ref)*(1+slip if side=="BUY" else 1-slip)
+        proposed_fill_price = raw_execution_price*(1+slip if side=="BUY" else 1-slip)
+        price_limit_bounded = False
+        fill_price = proposed_fill_price
+
+        if price_limits is not None:
+            limits = price_limits.get(ticker)
+            if limits is None:
+                # Defensive fail-closed. The daily-paper coordinator should
+                # already reject this order before reaching the executor.
+                continue
+            up_limit, down_limit = limits
+            up_limit, down_limit = float(up_limit), float(down_limit)
+            if (
+                not np.isfinite(up_limit)
+                or not np.isfinite(down_limit)
+                or up_limit <= 0
+                or down_limit <= 0
+                or down_limit > up_limit
+                or raw_execution_price > up_limit + 1e-8
+                or raw_execution_price < down_limit - 1e-8
+            ):
+                continue
+            bounded = min(max(proposed_fill_price, down_limit), up_limit)
+            price_limit_bounded = abs(bounded - proposed_fill_price) > 1e-12
+            fill_price = bounded
+
         notional = qty*fill_price
         commission = _commission(notional, commission_bps, min_commission_cny)
         stamp = notional*stamp_duty_rate(trade_date) if side=="SELL" else 0.0
@@ -440,7 +467,9 @@ def execute_orders(
             "ticker": ticker,
             "side": side,
             "qty": int(qty_exec),
+            "reference_price": float(raw_execution_price),
             "fill_price": float(fill_price),
+            "price_limit_bounded": bool(price_limit_bounded),
             "notional": float(qty_exec*fill_price),
             "commission": float(commission),
             "stamp_duty": float(stamp),
