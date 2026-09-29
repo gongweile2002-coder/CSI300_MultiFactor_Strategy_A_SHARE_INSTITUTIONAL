@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.data_contract_v8 import load_verified_dataset, normalize_tushare_prices
 from src.live_v8 import TradingCalendar, require
+from src.paper_ledger_v10 import PaperLedger
 from src.signals_v8 import last_completed_session
 from src.tushare_provider import _yyyymmdd
 from src.tushare_provider_v4 import TushareDownloaderV4
@@ -58,6 +59,46 @@ def _read(path: Path, dates: list[str] | None = None) -> pd.DataFrame:
         if col in x.columns:
             x[col] = pd.to_datetime(x[col], errors="coerce")
     return x
+
+
+def required_market_data_universe(
+    current_constituents: set[str],
+    prior_constituents: set[str] | None = None,
+    paper_required: set[str] | None = None,
+) -> set[str]:
+    return (
+        set(current_constituents)
+        | set(prior_constituents or set())
+        | set(paper_required or set())
+    )
+
+
+def _paper_required_tickers(state_dir: Path) -> set[str]:
+    state_dir = Path(state_dir)
+    account_id = "PAPER-CSI300-LIVE"
+    tickers: set[str] = set()
+    db_path = state_dir / "paper.sqlite3"
+
+    if db_path.exists():
+        ledger = PaperLedger(db_path)
+        account = ledger.load_account(account_id) or {}
+        tickers |= set(account.get("positions", {}).keys())
+        pending = ledger.load_pending(account_id)
+        if not pending.empty and "ticker" in pending.columns:
+            tickers |= set(pending["ticker"].astype(str))
+        return tickers
+
+    # Compatibility fallback for a pre-SQLite local state directory.
+    account_path = state_dir / "paper_account.json"
+    if account_path.exists():
+        account = json.loads(account_path.read_text(encoding="utf-8"))
+        tickers |= set(account.get("positions", {}).keys())
+    pending_path = state_dir / "pending_intents.csv"
+    if pending_path.exists():
+        pending = pd.read_csv(pending_path, dtype={"ticker": str})
+        if "ticker" in pending.columns:
+            tickers |= set(pending["ticker"].astype(str))
+    return tickers
 
 
 def _normalize_financial_rows(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -209,7 +250,15 @@ def _bulk_daily_rows(dl: TushareDownloaderV4, sessions: list[pd.Timestamp], curr
     return cat(raw_frames), cat(db_frames), cat(limit_frames)
 
 
-def _manifest(output: Path, previous: dict, asof: pd.Timestamp, current_count: int, industry_refreshed_at: str, st_status: str):
+def _manifest(
+    output: Path,
+    previous: dict,
+    asof: pd.Timestamp,
+    current_count: int,
+    industry_refreshed_at: str,
+    st_status: str,
+    market_data_ticker_count: int | None = None,
+):
     files = [
         "prices.csv", "raw_prices.csv", "trade_calendar.csv", "daily_basic.csv",
         "fundamentals_raw.csv", "index_membership.csv", "stock_metadata.csv",
@@ -223,6 +272,9 @@ def _manifest(output: Path, previous: dict, asof: pd.Timestamp, current_count: i
         "as_of": str(asof.date()),
         "created_at": now.isoformat(),
         "ticker_count": int(current_count),
+        "market_data_ticker_count": int(
+            market_data_ticker_count if market_data_ticker_count is not None else current_count
+        ),
         "amount_unit": "CNY",
         "volume_unit": "share",
         "membership_basis": "latest_available_index_weight_snapshot_not_exact_intramonth_changes",
@@ -246,6 +298,7 @@ def main(argv=None):
     p.add_argument("--output", default=str(BASE / "data/live"))
     p.add_argument("--lookback-years", type=int, default=3)
     p.add_argument("--sleep", type=float, default=0.25)
+    p.add_argument("--paper-state-dir", default=str(BASE / "paper/live"))
     args = p.parse_args(argv)
     require(args.lookback_years >= 2, "至少需要两年历史")
     load_env()
@@ -318,17 +371,37 @@ def main(argv=None):
     require(len(current) == 300, "最新沪深300成分快照不是 300 只")
     require(0 <= (latest - effective).days <= 45, "最新沪深300成分快照过旧")
 
+    prior_eligible = members_old[members_old["effective_date"] <= last]
+    if prior_eligible.empty:
+        prior_current: set[str] = set()
+    else:
+        prior_effective = prior_eligible["effective_date"].max()
+        prior_current = set(
+            prior_eligible.loc[
+                prior_eligible["effective_date"] == prior_effective,
+                "ticker",
+            ].astype(str)
+        )
+
+    paper_required = _paper_required_tickers(Path(args.paper_state_dir))
+    market_universe = required_market_data_universe(
+        current,
+        prior_current,
+        paper_required,
+    )
+
     raw_old = _read(output / "raw_prices.csv", ["date"])
     existing_tickers = set(raw_old["ticker"].astype(str)) if not raw_old.empty else set()
     new_tickers = sorted(current - existing_tickers)
+    new_market_tickers = sorted(market_universe - existing_tickers)
 
-    raw_new, db_new, limit_new = _bulk_daily_rows(dl, sessions, current)
+    raw_new, db_new, limit_new = _bulk_daily_rows(dl, sessions, market_universe)
 
     backfill_start = max(
         pd.Timestamp(latest) - pd.Timedelta(days=500),
         pd.Timestamp(latest) - pd.DateOffset(years=args.lookback_years),
     )
-    for ticker in new_tickers:
+    for ticker in new_market_tickers:
         r, d, l = _ticker_backfill(dl, ticker, backfill_start, latest)
         if not r.empty:
             raw_new = pd.concat([raw_new, r], ignore_index=True)
@@ -425,13 +498,20 @@ def main(argv=None):
     benchmark.to_csv(output / "benchmark.csv", index=False)
 
     manifest = _manifest(
-        output, previous, latest, len(current), industry_refreshed_at, st_status
+        output,
+        previous,
+        latest,
+        len(current),
+        industry_refreshed_at,
+        st_status,
+        market_data_ticker_count=len(market_universe),
     )
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     load_verified_dataset(output)
     print(
         f"增量刷新完成：{last.date()} -> {latest.date()}，"
-        f"{len(sessions)} 个交易日，当前成分 {len(current)}，新成分 {len(new_tickers)}。"
+        f"{len(sessions)} 个交易日，当前成分 {len(current)}，"
+        f"持续跟踪 {len(market_universe)} 只，新成分 {len(new_tickers)}。"
     )
     return 0
 
