@@ -1,0 +1,33 @@
+{
+  "risk": {
+    "version": "A_SHARE_V9_2_2026_09_28",
+    "strategy_id": "CSI300_CORE_V8",
+    "max_single_weight": 0.08,
+    "max_sector_weight": 0.3,
+    "max_gross_weight": 0.8,
+    "cash_buffer_pct": 0.05,
+    "max_turnover_per_day": 0.3,
+    "max_order_nav": 0.08,
+    "max_adv_participation": 0.01,
+    "max_spread_bps": 40,
+    "max_signal_gap_pct": 0.03,
+    "max_daily_loss": 0.025,
+    "max_drawdown": 0.1,
+    "max_quote_age_seconds": 30,
+    "max_account_age_seconds": 120,
+    "min_order_cny": 2000,
+    "rebalance_band_pct": 0.01,
+    "commission_bps": 3,
+    "minimum_commission": 5,
+    "transfer_fee_bps": 0.1,
+    "sell_stamp_bps": 5,
+    "allowed_buy_boards": [
+      "MAIN"
+    ],
+    "plan_valid_minutes": 10,
+    "max_orders_per_batch": 60
+  },
+  "live_enabled": false,
+  "broker_rules_confirmed": false,
+  "kill_switch_file": "ops/KILL_SWITCH"
+}

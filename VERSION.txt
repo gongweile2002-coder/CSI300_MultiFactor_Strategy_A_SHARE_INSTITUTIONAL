@@ -1,0 +1,3 @@
+A_SHARE_V9_2_2026_09_28
+Default: reviewed planning; real submission disabled.
+Stable strategy ID and existing order journal preserved and migrated in place.

@@ -1,0 +1,246 @@
+{
+  "index_code": "399300.SZ",
+  "start_date": "2019-01-01",
+  "end_date": "2026-09-04",
+  "momentum_lookback_days": 126,
+  "top_n": 30,
+  "transaction_cost_bps": 10,
+  "min_turnover_rate": 0.0,
+  "min_market_cap_cny_10k": 0.0,
+  "winsor_lower": 0.025,
+  "winsor_upper": 0.975,
+  "factor_weights": {
+    "value": 0.3333333333,
+    "quality": 0.3333333333,
+    "momentum": 0.3333333334
+  },
+  "latest_as_of": "2026-09-04",
+  "latest_top_n": 30,
+  "latest_output_name": "latest_selection_2026-09-04.csv",
+  "neutralize_market_cap": true,
+  "neutralize_industry": true,
+  "exclude_st": true,
+  "min_listing_trading_days": 120,
+  "liquidity_lookback_days": 20,
+  "liquidity_min_quantile": 0.1,
+  "commission_bps": 3.0,
+  "slippage_bps": 2.0,
+  "use_price_limits": true,
+  "walk_forward_train_months": 24,
+  "walk_forward_test_months": 6,
+  "optimizer_enabled": true,
+  "risk_lookback_days": 126,
+  "covariance_shrinkage": 0.35,
+  "alpha_strength": 1.0,
+  "risk_aversion": 8.0,
+  "turnover_penalty": 0.8,
+  "max_stock_weight": 0.08,
+  "min_stock_weight": 0.0,
+  "max_names": 30,
+  "sector_active_limit": 0.08,
+  "tracking_error_limit_annual": 0.12,
+  "benchmark_weight_floor": 0.0,
+  "optimizer_solver": "SLSQP",
+  "paper_initial_cash": 500000.0,
+  "paper_lot_size": 100,
+  "paper_commission_bps": 3.0,
+  "paper_min_commission_cny": 5.0,
+  "paper_slippage_bps": 2.0,
+  "paper_cash_buffer_pct": 0.01,
+  "paper_max_single_weight": 0.1,
+  "paper_allow_short": false,
+  "paper_enforce_t_plus_one": true,
+  "paper_execution_price_field": "open",
+  "production_mode": "paper_or_manual_approval_only",
+  "kill_switch_file": "ops/KILL_SWITCH",
+  "ops_dir": "ops",
+  "restricted_list_file": "ops/restricted_list.csv",
+  "max_data_staleness_days": 3,
+  "max_portfolio_gross_exposure": 1.0,
+  "max_portfolio_turnover": 0.8,
+  "max_sector_weight": 0.35,
+  "max_order_notional_pct_nav": 0.1,
+  "max_adv_participation_pct": 0.05,
+  "stress_market_shocks": [
+    -0.03,
+    -0.05,
+    -0.1
+  ],
+  "stress_sector_shock": -0.15,
+  "var_confidence": 0.95,
+  "cvar_confidence": 0.95,
+  "bootstrap_scenarios": 2000,
+  "approval_required": true,
+  "live_broker_submission_enabled": false,
+  "ashare_pro": {
+    "enabled": true,
+    "regime_lookback_days": 120,
+    "breadth_ma_days": 20,
+    "turnover_short_days": 20,
+    "turnover_long_days": 60,
+    "momentum_long_days": 126,
+    "momentum_skip_days": 20,
+    "short_reversal_days": 5,
+    "low_vol_days": 20,
+    "sector_mom_short_days": 20,
+    "sector_mom_long_days": 60,
+    "crowding_turnover_z_limit": 2.0,
+    "volume_ratio_buy_cap": 3.0,
+    "skip_limit_up_new_buys": true,
+    "max_tactical_holding_days": 20,
+    "tactical_rebalance": "W-FRI",
+    "core_rebalance": "month_end",
+    "post_close_fixed_price_from": "2026-07-06",
+    "preferred_execution_after_2026_07_06": "next_open",
+    "legacy_execution": "next_open",
+    "gross_exposure_by_regime": {
+      "TREND_UP": 1.0,
+      "HIGH_ROTATION": 0.85,
+      "RANGE": 0.75,
+      "RISK_OFF": 0.5,
+      "PANIC": 0.3
+    },
+    "factor_weights_by_regime": {
+      "TREND_UP": {
+        "value": 0.1,
+        "quality": 0.2,
+        "momentum_skip": 0.35,
+        "short_reversal": 0.0,
+        "low_vol": 0.1,
+        "dividend": 0.05,
+        "sector_rotation": 0.15,
+        "crowding": 0.05
+      },
+      "HIGH_ROTATION": {
+        "value": 0.1,
+        "quality": 0.2,
+        "momentum_skip": 0.2,
+        "short_reversal": 0.15,
+        "low_vol": 0.1,
+        "dividend": 0.05,
+        "sector_rotation": 0.15,
+        "crowding": 0.05
+      },
+      "RANGE": {
+        "value": 0.2,
+        "quality": 0.25,
+        "momentum_skip": 0.05,
+        "short_reversal": 0.2,
+        "low_vol": 0.1,
+        "dividend": 0.1,
+        "sector_rotation": 0.05,
+        "crowding": 0.05
+      },
+      "RISK_OFF": {
+        "value": 0.15,
+        "quality": 0.3,
+        "momentum_skip": 0.05,
+        "short_reversal": 0.05,
+        "low_vol": 0.2,
+        "dividend": 0.15,
+        "sector_rotation": 0.05,
+        "crowding": 0.05
+      },
+      "PANIC": {
+        "value": 0.1,
+        "quality": 0.3,
+        "momentum_skip": 0.0,
+        "short_reversal": 0.05,
+        "low_vol": 0.25,
+        "dividend": 0.2,
+        "sector_rotation": 0.0,
+        "crowding": 0.1
+      }
+    }
+  },
+  "ashare_elite": {
+    "enabled": true,
+    "sleeves": {
+      "core_multifactor": 0.55,
+      "sector_rotation": 0.2,
+      "mean_reversion": 0.1,
+      "ml_rank": 0.0
+    },
+    "min_sleeve_weight": 0.0,
+    "max_sleeve_weight": 0.65,
+    "sleeve_train_months": 24,
+    "sleeve_test_months": 6,
+    "ml_train_months": 24,
+    "ml_retrain_every_months": 3,
+    "ml_min_train_rows": 300,
+    "ml_max_weight": 0.2,
+    "multiple_testing_penalty": true,
+    "strategy_allowlist": [
+      "core_multifactor",
+      "sector_rotation",
+      "mean_reversion",
+      "ml_rank"
+    ],
+    "strategy_denylist": [
+      "pure_low_price",
+      "pure_small_cap",
+      "chase_limit_up",
+      "single_indicator_macd",
+      "single_indicator_rsi"
+    ]
+  },
+  "institutional": {
+    "universes": {
+      "CSI300": "399300.SZ",
+      "CSI500": "000905.SH",
+      "CSI1000": "000852.SH"
+    },
+    "universe_weights_by_regime": {
+      "TREND_UP": {
+        "CSI300": 0.55,
+        "CSI500": 0.3,
+        "CSI1000": 0.15
+      },
+      "HIGH_ROTATION": {
+        "CSI300": 0.45,
+        "CSI500": 0.35,
+        "CSI1000": 0.2
+      },
+      "RANGE": {
+        "CSI300": 0.65,
+        "CSI500": 0.25,
+        "CSI1000": 0.1
+      },
+      "RISK_OFF": {
+        "CSI300": 0.8,
+        "CSI500": 0.2,
+        "CSI1000": 0.0
+      },
+      "PANIC": {
+        "CSI300": 0.9,
+        "CSI500": 0.1,
+        "CSI1000": 0.0
+      }
+    },
+    "fundamental_extension_weights": {
+      "fcf_yield": 0.35,
+      "cash_quality": 0.35,
+      "earnings_event": 0.3
+    },
+    "event_signal_max_age_days": 120,
+    "etf_sleeve_weight": 0.15,
+    "etf_top_k": 3,
+    "etf_momentum_days": [
+      20,
+      60,
+      120
+    ],
+    "etf_vol_days": 20,
+    "etf_min_history_days": 130,
+    "strategy_lifecycle": {
+      "short_window_months": 6,
+      "long_window_months": 12,
+      "pause_ic_threshold": -0.02,
+      "reduce_ic_threshold": 0.0,
+      "reactivate_ic_threshold": 0.02,
+      "min_months_for_decision": 6,
+      "core_floor": 0.3,
+      "ml_cap": 0.2
+    }
+  }
+}
