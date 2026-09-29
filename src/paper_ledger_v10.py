@@ -331,6 +331,9 @@ class PaperLedger:
             if fault_point == "before_commit":
                 raise RuntimeError("simulated crash before_commit")
             conn.commit()
+            # Keep the main database file self-contained after each committed
+            # paper day. WAL remains enabled for crash safety during the run.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             return "OK"
         except Exception:
             conn.rollback()
