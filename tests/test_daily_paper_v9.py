@@ -81,8 +81,9 @@ def test_next_day_executes_prior_signal_at_real_open_and_marks_close(tmp_path):
 
     day2 = day1.copy()
     day2["signal_date"] = "2026-09-02"
+    raw_to_day2 = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])]
     result = run_paper_day(
-        tmp_path, day2, _raw(), pd.DataFrame(),
+        tmp_path, day2, raw_to_day2, pd.DataFrame(),
         {"signal_date": "2026-09-02"},
         _config(), _calendar(), initial_cash=100000,
     )
@@ -163,7 +164,7 @@ def test_share_quantity_is_fixed_before_next_open(tmp_path):
     assert int(pending.loc[pending["side"] == "BUY", "qty"].iloc[0]) == 5000
 
     day2_raw = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])].copy()
-    day2_raw.loc[day2_raw["date"] == "2026-09-02", "open"] = 20.0
+    day2_raw.loc[day2_raw["date"] == "2026-09-02", "open"] = 15.0
     day2 = day1.copy()
     day2["signal_date"] = "2026-09-02"
     run_paper_day(
