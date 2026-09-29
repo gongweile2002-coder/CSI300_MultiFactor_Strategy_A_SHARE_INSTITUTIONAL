@@ -60,31 +60,81 @@ def _read(path: Path, dates: list[str] | None = None) -> pd.DataFrame:
     return x
 
 
-def _financial_rows(dl: TushareDownloaderV4, tickers: list[str], start, end) -> pd.DataFrame:
-    frames = []
+def _normalize_financial_rows(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True).rename(columns={
+        "ts_code": "ticker",
+        "end_date": "report_date",
+        "netprofit_yoy": "profit_growth",
+        "debt_to_assets": "debt_ratio",
+    })
+    out["ann_date"] = pd.to_datetime(out["ann_date"], errors="coerce")
+    out["report_date"] = pd.to_datetime(out["report_date"], errors="coerce")
+    return out.dropna(subset=["ticker", "ann_date", "report_date"])
+
+
+def _financial_rows_by_announcement(
+    dl: TushareDownloaderV4,
+    tickers: list[str],
+    start_ann_date,
+    end_ann_date,
+) -> pd.DataFrame:
+    """
+    Fetch newly published financial indicators by announcement date.
+
+    Tushare fina_indicator start_date/end_date are report-period filters, not
+    announcement-date filters. Incremental PIT refreshes therefore query each
+    calendar announcement date explicitly so weekend/holiday announcements are
+    not silently skipped.
+    """
+    start = pd.Timestamp(start_ann_date).normalize()
+    end = pd.Timestamp(end_ann_date).normalize()
+    if end < start:
+        return pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    fields = "ts_code,ann_date,end_date,roe,roe_dt,netprofit_yoy,debt_to_assets"
+    for ann_day in pd.date_range(start, end, freq="D"):
+        ann = _yyyymmdd(ann_day)
+        for ticker in tickers:
+            df = dl.pro.fina_indicator(
+                ts_code=ticker,
+                ann_date=ann,
+                fields=fields,
+            )
+            dl._pause()
+            if df is None or df.empty:
+                continue
+            # Fail closed against an API/proxy returning rows outside the
+            # requested announcement date.
+            got = pd.to_datetime(df["ann_date"], errors="coerce")
+            df = df.loc[got.dt.strftime("%Y%m%d") == ann].copy()
+            if not df.empty:
+                frames.append(df)
+    return _normalize_financial_rows(frames)
+
+
+def _financial_history_rows(
+    dl: TushareDownloaderV4,
+    tickers: list[str],
+    start_report_date,
+    end_report_date,
+) -> pd.DataFrame:
+    """Backfill report-period history for newly introduced tickers."""
+    frames: list[pd.DataFrame] = []
     fields = "ts_code,ann_date,end_date,roe,roe_dt,netprofit_yoy,debt_to_assets"
     for ticker in tickers:
         df = dl.pro.fina_indicator(
             ts_code=ticker,
-            start_date=_yyyymmdd(start),
-            end_date=_yyyymmdd(end),
+            start_date=_yyyymmdd(start_report_date),
+            end_date=_yyyymmdd(end_report_date),
             fields=fields,
         )
         dl._pause()
-        if df is None or df.empty:
-            continue
-        frames.append(df.rename(columns={
-            "ts_code": "ticker",
-            "end_date": "report_date",
-            "netprofit_yoy": "profit_growth",
-            "debt_to_assets": "debt_ratio",
-        }))
-    if not frames:
-        return pd.DataFrame()
-    out = pd.concat(frames, ignore_index=True)
-    out["ann_date"] = pd.to_datetime(out["ann_date"], errors="coerce")
-    out["report_date"] = pd.to_datetime(out["report_date"], errors="coerce")
-    return out.dropna(subset=["ann_date"])
+        if df is not None and not df.empty:
+            frames.append(df)
+    return _normalize_financial_rows(frames)
 
 
 def _ticker_backfill(dl: TushareDownloaderV4, ticker: str, start, end):
@@ -300,9 +350,19 @@ def main(argv=None):
     limits.to_csv(output / "stock_limits.csv", index=False)
 
     financial_old = _read(output / "fundamentals_raw.csv", ["ann_date", "report_date"])
-    financial_new = _financial_rows(dl, sorted(current), last + pd.Timedelta(days=1), latest)
+    financial_new = _financial_rows_by_announcement(
+        dl,
+        sorted(current),
+        last + pd.Timedelta(days=1),
+        latest,
+    )
     for ticker in new_tickers:
-        extra = _financial_rows(dl, [ticker], latest - pd.Timedelta(days=900), latest)
+        extra = _financial_history_rows(
+            dl,
+            [ticker],
+            latest - pd.Timedelta(days=900),
+            latest,
+        )
         if not extra.empty:
             financial_new = pd.concat([financial_new, extra], ignore_index=True)
     financial = merge_frame(
