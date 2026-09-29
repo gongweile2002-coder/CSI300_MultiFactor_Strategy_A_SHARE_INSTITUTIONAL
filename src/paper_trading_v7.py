@@ -36,6 +36,8 @@ def init_account(initial_cash, as_of, account_id="PAPER-CSI300"):
         "created_at": str(_ts(as_of).date()),
         "as_of": str(_ts(as_of).date()),
         "cash": float(initial_cash),
+        "cash_receivables": {},
+        "share_receivables": {},
         "positions": {},
         "realized_pnl": 0.0,
         "fees_paid": 0.0,
@@ -48,6 +50,35 @@ def _position_qty(account, ticker):
     return int(sum(int(l.get("qty", 0)) for l in p.get("lots", [])))
 
 
+def _pending_share_qty(account, ticker):
+    return int(sum(
+        int(v.get("qty", 0))
+        for v in account.get("share_receivables", {}).values()
+        if str(v.get("ticker")) == str(ticker)
+    ))
+
+
+def _economic_position_qty(account, ticker):
+    return int(_position_qty(account, ticker) + _pending_share_qty(account, ticker))
+
+
+def _cash_receivable_value(account):
+    return float(sum(
+        float(v.get("amount", 0.0))
+        for v in account.get("cash_receivables", {}).values()
+    ))
+
+
+def _economic_tickers(account):
+    out = set(account.get("positions", {}).keys())
+    out |= {
+        str(v.get("ticker"))
+        for v in account.get("share_receivables", {}).values()
+        if v.get("ticker")
+    }
+    return out
+
+
 def sellable_qty(account, ticker, trade_date, enforce_t_plus_one=True):
     p = account.get("positions", {}).get(ticker, {})
     total = 0
@@ -55,6 +86,9 @@ def sellable_qty(account, ticker, trade_date, enforce_t_plus_one=True):
     for lot in p.get("lots", []):
         q = int(lot.get("qty", 0))
         if q <= 0:
+            continue
+        sellable_from = lot.get("sellable_from")
+        if sellable_from and _ts(sellable_from) > td:
             continue
         if not enforce_t_plus_one:
             total += q
@@ -68,16 +102,18 @@ def sellable_qty(account, ticker, trade_date, enforce_t_plus_one=True):
 def position_cost_basis(account, ticker):
     p = account.get("positions", {}).get(ticker, {})
     lots = [l for l in p.get("lots", []) if int(l.get("qty", 0)) > 0]
-    qty = sum(int(l["qty"]) for l in lots)
-    if qty <= 0:
+    settled_qty = sum(int(l["qty"]) for l in lots)
+    economic_qty = settled_qty + _pending_share_qty(account, ticker)
+    if economic_qty <= 0:
         return np.nan
-    return float(sum(int(l["qty"])*float(l["price"]) for l in lots) / qty)
+    total_cost = sum(int(l["qty"])*float(l["price"]) for l in lots)
+    return float(total_cost / economic_qty)
 
 
 def market_value(account, price_map):
     mv = 0.0
-    for ticker in account.get("positions", {}):
-        qty = _position_qty(account, ticker)
+    for ticker in _economic_tickers(account):
+        qty = _economic_position_qty(account, ticker)
         px = price_map.get(ticker, np.nan)
         if qty > 0:
             if pd.isna(px) or not np.isfinite(float(px)) or float(px)<=0:
@@ -87,14 +123,20 @@ def market_value(account, price_map):
 
 
 def nav(account, price_map):
-    return float(account.get("cash", 0.0)) + market_value(account, price_map)
+    return (
+        float(account.get("cash", 0.0))
+        + _cash_receivable_value(account)
+        + market_value(account, price_map)
+    )
 
 
 def account_snapshot(account, price_map, as_of):
     rows = []
     total_nav = nav(account, price_map)
-    for ticker in sorted(account.get("positions", {})):
-        qty = _position_qty(account, ticker)
+    for ticker in sorted(_economic_tickers(account)):
+        settled_qty = _position_qty(account, ticker)
+        pending_share_qty = _pending_share_qty(account, ticker)
+        qty = settled_qty + pending_share_qty
         if qty <= 0:
             continue
         px = price_map.get(ticker, np.nan)
@@ -104,6 +146,8 @@ def account_snapshot(account, price_map, as_of):
             "as_of": _ts(as_of),
             "ticker": ticker,
             "qty": qty,
+            "settled_qty": settled_qty,
+            "pending_share_qty": pending_share_qty,
             "sellable_qty": sellable_qty(account, ticker, as_of, True),
             "last_price": px,
             "market_value": mv,
@@ -185,7 +229,7 @@ def generate_orders(
     investable_nav = total_nav * (1.0 - float(cash_buffer_pct))
     limit_map = _limit_flags(stock_limits, trade_date)
 
-    current_tickers = set(account.get("positions", {}).keys())
+    current_tickers = _economic_tickers(account)
     target_tickers = set(g["ticker"])
     all_tickers = sorted(current_tickers | target_tickers)
 
@@ -208,7 +252,7 @@ def generate_orders(
             })
             continue
 
-        current_qty = _position_qty(account, ticker)
+        current_qty = _economic_position_qty(account, ticker)
         target_weight = float(target_weight_map.get(ticker, 0.0))
         target_qty = _target_shares_from_weight(
             investable_nav, target_weight, float(px), int(lot_size)
@@ -319,6 +363,9 @@ def _consume_fifo_lots(account, ticker, qty_to_sell, sell_price, trade_date, enf
             break
         q = int(lot.get("qty",0))
         if q <= 0:
+            continue
+        sellable_from = lot.get("sellable_from")
+        if sellable_from and _ts(sellable_from) > td:
             continue
         if enforce_t_plus_one and _ts(lot["acquired_date"]) >= td:
             continue
@@ -497,7 +544,7 @@ def pre_trade_checks(
         side = str(o["side"])
         qty = int(o["qty"])
         px = prices.get(ticker, o.get("reference_price", np.nan))
-        current_qty = _position_qty(account, ticker)
+        current_qty = _economic_position_qty(account, ticker)
         available = sellable_qty(account, ticker, o["trade_date"], enforce_t_plus_one)
 
         issues = []
@@ -526,11 +573,13 @@ def pre_trade_checks(
 def reconcile(account, prices, as_of):
     snap = account_snapshot(account, prices, as_of)
     total_mv = float(snap["market_value"].sum()) if not snap.empty else 0.0
-    total_nav = float(account.get("cash",0.0))+total_mv
+    cash_receivable = _cash_receivable_value(account)
+    total_nav = float(account.get("cash",0.0)) + cash_receivable + total_mv
 
     summary = pd.DataFrame([{
         "as_of": _ts(as_of),
         "cash": float(account.get("cash",0.0)),
+        "cash_receivable": cash_receivable,
         "market_value": total_mv,
         "nav": total_nav,
         "realized_pnl": float(account.get("realized_pnl",0.0)),
