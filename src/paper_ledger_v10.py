@@ -122,6 +122,16 @@ class PaperLedger:
                     PRIMARY KEY (account_id, kind, record_key)
                 );
 
+                CREATE TABLE IF NOT EXISTS corporate_action_events (
+                    account_id TEXT NOT NULL,
+                    event_key TEXT NOT NULL,
+                    action_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    event_date TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (account_id, event_key)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_records_kind_asof
                     ON records(account_id, kind, as_of);
                 """
@@ -169,6 +179,40 @@ class PaperLedger:
                 (account_id, d),
             ).fetchone()
         return dict(row) if row else None
+
+    def position_qty_on(self, account_id: str, ticker: str, as_of) -> int | None:
+        day = str(pd.Timestamp(as_of).normalize().date())
+        with self._connect() as conn:
+            run = conn.execute(
+                "SELECT 1 FROM runs WHERE account_id=? AND signal_date=?",
+                (account_id, day),
+            ).fetchone()
+            if not run:
+                return None
+            row = conn.execute(
+                """
+                SELECT payload_json
+                FROM records
+                WHERE account_id=? AND kind='position' AND record_key=?
+                """,
+                (account_id, f"{day}|{ticker}"),
+            ).fetchone()
+        if not row:
+            return 0
+        payload = json.loads(row["payload_json"])
+        return int(payload.get("qty", 0))
+
+    def applied_corporate_action_ids(self, account_id: str) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT action_id
+                FROM corporate_action_events
+                WHERE account_id=? AND event_type='ENTITLEMENT'
+                """,
+                (account_id,),
+            ).fetchall()
+        return {str(r["action_id"]) for r in rows}
 
     def last_nav(self, account_id: str) -> float | None:
         with self._connect() as conn:
@@ -222,6 +266,7 @@ class PaperLedger:
         fills: pd.DataFrame,
         summary: pd.DataFrame,
         positions: pd.DataFrame,
+        corporate_action_events: pd.DataFrame | None = None,
         fault_point: str | None = None,
     ) -> str:
         signal_day = str(pd.Timestamp(signal_date).normalize().date())
@@ -312,6 +357,31 @@ class PaperLedger:
                 lambda r: f"{signal_day}|{r.get('ticker', '')}",
             )
 
+            for row in _frame_records(corporate_action_events):
+                event_key = str(row.get("event_key", ""))
+                action_id = str(row.get("action_id", ""))
+                event_type = str(row.get("event_type", ""))
+                event_date = str(row.get("event_date", signal_day))[:10]
+                if not event_key or not action_id or not event_type:
+                    raise ValueError("corporate action event 缺少关键字段")
+                conn.execute(
+                    """
+                    INSERT INTO corporate_action_events(
+                        account_id, event_key, action_id,
+                        event_type, event_date, payload_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        account_id,
+                        event_key,
+                        action_id,
+                        event_type,
+                        event_date,
+                        _json_dumps(row),
+                    ),
+                )
+
             conn.execute(
                 """
                 INSERT INTO runs(
@@ -361,6 +431,19 @@ class PaperLedger:
             rows = conn.execute(sql, args).fetchall()
         return pd.DataFrame([json.loads(r["payload_json"]) for r in rows])
 
+    def _corporate_action_frame(self, account_id: str) -> pd.DataFrame:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM corporate_action_events
+                WHERE account_id=?
+                ORDER BY event_date, event_key
+                """,
+                (account_id,),
+            ).fetchall()
+        return pd.DataFrame([json.loads(r["payload_json"]) for r in rows])
+
     def export(self, state_dir, account_id: str, signal_date) -> None:
         state_dir = Path(state_dir)
         signal_day = str(pd.Timestamp(signal_date).normalize().date())
@@ -391,6 +474,13 @@ class PaperLedger:
             if not frame.empty:
                 _atomic_csv(state_dir / name, frame)
 
+        corporate_actions = self._corporate_action_frame(account_id)
+        if not corporate_actions.empty:
+            _atomic_csv(
+                state_dir / "corporate_action_history.csv",
+                corporate_actions,
+            )
+
         run_dir = state_dir / "runs" / signal_day
         run_dir.mkdir(parents=True, exist_ok=True)
         run_map = {
@@ -404,3 +494,8 @@ class PaperLedger:
             frame = self._records_frame(account_id, kind, signal_day)
             _atomic_csv(run_dir / name, frame)
         _atomic_csv(run_dir / "pending_intents.csv", pending)
+        if not corporate_actions.empty and "event_date" in corporate_actions.columns:
+            day_actions = corporate_actions[
+                corporate_actions["event_date"].astype(str).str[:10].eq(signal_day)
+            ].copy()
+            _atomic_csv(run_dir / "corporate_actions.csv", day_actions)
