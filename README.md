@@ -1,4 +1,4 @@
-# 沪深300多因子 · A股操作修订版 v9.2
+# 沪深300多因子 · A股操作修订版 v9.2 + v9.3 Paper Trading
 
 **v9.2：在 v9.1 选股分配修复的基础上强化真实委托安全层：计划默认 10 分钟失效、单批委托数量上限、SQLite 订单状态机（APPROVED → SUBMITTING → SUBMITTED/PARTIAL/FILLED）、本地现金/可卖股冻结记录、非法状态回退拦截、Kill Switch 在券商调用前落盘为 BLOCKED，并对旧 v8/v9.1 台账做无损字段迁移。先看 [Mac启动与 v9.2 升级](docs/Mac启动与V9_2升级.md)。本次 147 项离线测试通过，演示运行通过；未验证收益改善。**
 
@@ -28,6 +28,22 @@ python live.py doctor
 - [审计与修复记录](docs/审计与修复记录.md)：发现的问题、修改位置、验证边界。
 - [交易规则与接口依据](docs/交易规则与接口依据.md)：交易所、Tushare 和迅投原始文档。
 - `ops/validation_results.json`、`ops/validation_junit_v9_2.xml`：本次真实运行的软件测试记录。
+
+
+## v9.3：真实数据每日候选 + 前向 Paper Trading
+
+新增一条与真实券商完全隔离的前向纸面交易链路：
+
+- `update_live_data.py`：首次完整 bootstrap，之后按最近完成交易日增量刷新 Tushare 数据；日线、复权因子、daily_basic 和涨跌停优先按交易日批量更新，新纳入成分再补历史。
+- 财务信号继续按公告日做 point-in-time 过滤；数据清单显式记录 PIT 规则和 ST 历史是否降级。
+- `daily_paper.py run --refresh`：收盘后生成当日真实候选；上一交易日候选只能在下一完成交易日使用真实未复权开盘价纸面成交，并用当日真实未复权收盘价记 NAV。
+- `paper/live/`：保存候选、委托、成交、持仓与 NAV 历史；同一 signal_date 重跑是幂等的。
+- `.github/workflows/daily-paper.yml`：合并到默认分支后可在上海时间工作日 19:30 自动运行；需要仓库 Actions Secret `TUSHARE_TOKEN`。
+- **不会调用券商接口**，`live_enabled=false` 仍保持默认关闭。
+
+详细说明见 [v9.3 真实数据 Paper Trading](docs/V9_3真实数据PaperTrading.md)。
+
+本层使用 Tushare 日线 raw open/close 做前向纸面成交，不是 tick 级实时撮合；因此它用于验证数据、信号和执行流程，不代表真实成交能力或真实投资业绩。
 
 ## v9.2 新增实盘安全层
 

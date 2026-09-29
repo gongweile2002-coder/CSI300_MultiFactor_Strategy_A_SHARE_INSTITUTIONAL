@@ -39,14 +39,34 @@ def main():
     dl.fetch_prices_for_tickers(tickers,start,asof);dl.fetch_daily_basic_for_tickers(tickers,start,asof)
     dl.fetch_fundamentals_for_tickers(tickers,start-pd.Timedelta(days=800),asof)
     dl.fetch_stock_limits_for_tickers(tickers,start,asof);dl.fetch_sw_industry_membership(tickers)
-    # Exceptions propagate. An empty successful result can legitimately mean no ST names.
-    dl.fetch_st_status_for_tickers(tickers,start,asof);dl.fetch_benchmark('399300.SZ',start,asof)
+    # Historical ST data can require a higher Tushare permission tier. For the
+    # live signal, stock_basic names still provide a conservative current-name
+    # fallback; record the degraded provenance explicitly instead of pretending
+    # the history is complete.
+    st_history_status = "downloaded"
+    try:
+        dl.fetch_st_status_for_tickers(tickers,start,asof)
+    except Exception as exc:
+        pd.DataFrame(
+            columns=["ticker","name","trade_date","type","type_name"]
+        ).to_csv(d/'st_status.csv',index=False)
+        st_history_status = f"fallback_stock_basic_name:{type(exc).__name__}"
+    dl.fetch_benchmark('399300.SZ',start,asof)
     files=['prices.csv','raw_prices.csv','trade_calendar.csv','daily_basic.csv','fundamentals_raw.csv','index_membership.csv',
            'stock_metadata.csv','industry_membership.csv','st_status.csv','benchmark.csv','stock_limits.csv']
     manifest={'schema_version':8,'source':'tushare','complete_universe':True,'as_of':str(asof.date()),
         'created_at':now.isoformat(),'ticker_count':len(tickers),'amount_unit':'CNY','volume_unit':'share',
         'membership_basis':'latest_available_index_weight_snapshot_not_exact_intramonth_changes',
-        'financial_vintages':'vendor_history_not_independently_archived',
+        'financial_vintages':'ann_date_point_in_time_vendor_history_not_independently_archived',
+        'point_in_time_policy':{
+            'financials':'ann_date strictly before signal_date',
+            'index_membership':'latest effective_date not after signal_date',
+            'industry':'in_date/out_date active on signal_date',
+            'execution':'post-close signal; paper fills only on a later completed session raw open'
+        },
+        'refresh_mode':'full_bootstrap',
+        'industry_refreshed_at':str(asof.date()),
+        'st_history_status':st_history_status,
         'files':{name:hashlib.sha256((d/name).read_bytes()).hexdigest() for name in files}}
     (d/'data_manifest_v8.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     print(f'数据下载完成：{len(tickers)} 只历史成分股，截止 {asof.date()}。请运行 live.py signal。')
