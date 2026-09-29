@@ -315,3 +315,87 @@ def test_slippage_fill_is_bounded_by_up_limit(tmp_path):
     assert float(fills.iloc[0]["reference_price"]) == pytest.approx(10.99)
     assert float(fills.iloc[0]["fill_price"]) == pytest.approx(11.0)
     assert str(fills.iloc[0]["price_limit_bounded"]).lower() in {"true", "1"}
+
+
+def test_changed_signal_same_date_is_conflict(tmp_path):
+    targets = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "target_weight": 0.5,
+        "signal_date": "2026-09-01",
+        "source": "real",
+    }])
+    run_paper_day(
+        tmp_path,
+        targets,
+        _raw()[lambda x: x["date"] == "2026-09-01"],
+        pd.DataFrame(),
+        {"signal_date": "2026-09-01"},
+        _config(),
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    changed = targets.copy()
+    changed["target_weight"] = 0.6
+    with pytest.raises(ValueError, match="不同 signal bundle"):
+        run_paper_day(
+            tmp_path,
+            changed,
+            _raw()[lambda x: x["date"] == "2026-09-01"],
+            pd.DataFrame(),
+            {"signal_date": "2026-09-01"},
+            _config(),
+            _calendar(),
+            initial_cash=100000,
+        )
+
+
+def test_crash_before_sqlite_commit_does_not_double_book(tmp_path):
+    day1 = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "target_weight": 0.5,
+        "signal_date": "2026-09-01",
+        "source": "real",
+    }])
+    run_paper_day(
+        tmp_path,
+        day1,
+        _raw()[lambda x: x["date"] == "2026-09-01"],
+        pd.DataFrame(),
+        {"signal_date": "2026-09-01"},
+        _config(),
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    day2 = day1.copy()
+    day2["signal_date"] = "2026-09-02"
+    raw_to_day2 = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])]
+
+    with pytest.raises(RuntimeError, match="simulated crash before_commit"):
+        run_paper_day(
+            tmp_path,
+            day2,
+            raw_to_day2,
+            _limits(),
+            {"signal_date": "2026-09-02"},
+            _config(),
+            _calendar(),
+            initial_cash=100000,
+            fault_point="before_commit",
+        )
+
+    result = run_paper_day(
+        tmp_path,
+        day2,
+        raw_to_day2,
+        _limits(),
+        {"signal_date": "2026-09-02"},
+        _config(),
+        _calendar(),
+        initial_cash=100000,
+    )
+    assert result["fills"] == 1
+    fills = pd.read_csv(tmp_path / "fill_history.csv")
+    assert len(fills) == 1
+    assert fills["fill_id"].nunique() == 1
