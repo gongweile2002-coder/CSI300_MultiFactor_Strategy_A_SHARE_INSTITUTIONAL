@@ -37,6 +37,23 @@ def _calendar():
     ])
 
 
+def _limits():
+    return pd.DataFrame([
+        {
+            "date": "2026-09-02",
+            "ticker": "000001.SZ",
+            "up_limit": 20.0,
+            "down_limit": 5.0,
+        },
+        {
+            "date": "2026-09-03",
+            "ticker": "000001.SZ",
+            "up_limit": 20.0,
+            "down_limit": 5.0,
+        },
+    ])
+
+
 def test_first_day_stages_candidates_without_same_day_fill(tmp_path):
     targets = pd.DataFrame([{
         "ticker": "000001.SZ",
@@ -83,7 +100,7 @@ def test_next_day_executes_prior_signal_at_real_open_and_marks_close(tmp_path):
     day2["signal_date"] = "2026-09-02"
     raw_to_day2 = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])]
     result = run_paper_day(
-        tmp_path, day2, raw_to_day2, pd.DataFrame(),
+        tmp_path, day2, raw_to_day2, _limits(),
         {"signal_date": "2026-09-02"},
         _config(), _calendar(), initial_cash=100000,
     )
@@ -171,7 +188,7 @@ def test_share_quantity_is_fixed_before_next_open(tmp_path):
         tmp_path,
         day2,
         day2_raw,
-        pd.DataFrame(),
+        _limits(),
         {"signal_date": "2026-09-02"},
         _config(),
         _calendar(),
@@ -213,3 +230,88 @@ def test_missed_expected_session_does_not_fill_at_later_open(tmp_path):
             _calendar(),
             initial_cash=100000,
         )
+
+
+def test_missing_limit_data_fails_closed(tmp_path):
+    day1 = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "target_weight": 0.5,
+        "signal_date": "2026-09-01",
+        "source": "real",
+    }])
+    run_paper_day(
+        tmp_path,
+        day1,
+        _raw()[lambda x: x["date"] == "2026-09-01"],
+        pd.DataFrame(),
+        {"signal_date": "2026-09-01"},
+        _config(),
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    day2 = day1.copy()
+    day2["signal_date"] = "2026-09-02"
+    raw_to_day2 = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])]
+    result = run_paper_day(
+        tmp_path,
+        day2,
+        raw_to_day2,
+        pd.DataFrame(),
+        {"signal_date": "2026-09-02"},
+        _config(),
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    assert result["fills"] == 0
+    orders = pd.read_csv(tmp_path / "order_history.csv")
+    assert "missing_or_invalid_stock_limit_data" in set(orders["reason"].astype(str))
+
+
+def test_slippage_fill_is_bounded_by_up_limit(tmp_path):
+    cfg = _config()
+    cfg["paper_slippage_bps"] = 100.0
+    day1 = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "target_weight": 0.5,
+        "signal_date": "2026-09-01",
+        "source": "real",
+    }])
+    run_paper_day(
+        tmp_path,
+        day1,
+        _raw()[lambda x: x["date"] == "2026-09-01"],
+        pd.DataFrame(),
+        {"signal_date": "2026-09-01"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    day2_raw = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])].copy()
+    day2_raw.loc[day2_raw["date"] == "2026-09-02", "open"] = 10.99
+    day2 = day1.copy()
+    day2["signal_date"] = "2026-09-02"
+    tight_limits = pd.DataFrame([{
+        "date": "2026-09-02",
+        "ticker": "000001.SZ",
+        "up_limit": 11.0,
+        "down_limit": 9.0,
+    }])
+    result = run_paper_day(
+        tmp_path,
+        day2,
+        day2_raw,
+        tight_limits,
+        {"signal_date": "2026-09-02"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    assert result["fills"] == 1
+    fills = pd.read_csv(tmp_path / "fill_history.csv")
+    assert float(fills.iloc[0]["reference_price"]) == pytest.approx(10.99)
+    assert float(fills.iloc[0]["fill_price"]) == pytest.approx(11.0)
+    assert str(fills.iloc[0]["price_limit_bounded"]).lower() in {"true", "1"}
