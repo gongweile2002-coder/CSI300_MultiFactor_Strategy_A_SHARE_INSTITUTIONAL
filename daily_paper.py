@@ -19,7 +19,7 @@ def _json(path):
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
-def _refresh(data_dir: Path, lookback_years: int) -> None:
+def _refresh(data_dir: Path, lookback_years: int, state_dir: Path) -> None:
     cmd = [
         sys.executable,
         str(BASE / "update_live_data.py"),
@@ -27,6 +27,8 @@ def _refresh(data_dir: Path, lookback_years: int) -> None:
         str(data_dir),
         "--lookback-years",
         str(lookback_years),
+        "--paper-state-dir",
+        str(state_dir),
     ]
     subprocess.run(cmd, cwd=BASE, check=True)
 
@@ -54,7 +56,15 @@ def main(argv=None):
 
     if args.command == "status":
         d = Path(args.state_dir)
-        state = _json(d / "state.json")
+        state_path = d / "state.json"
+        if not state_path.exists():
+            print(json.dumps({
+                "status": "NOT_INITIALIZED",
+                "state_dir": str(d),
+                "real_broker_submission": False,
+            }, ensure_ascii=False, indent=2))
+            return 0
+        state = _json(state_path)
         print(json.dumps(state, ensure_ascii=False, indent=2))
         nav = d / "nav_history.csv"
         if nav.exists():
@@ -63,8 +73,9 @@ def main(argv=None):
 
     data_dir = Path(args.data)
     signal_dir = Path(args.signals)
+    state_dir = Path(args.state_dir)
     if args.refresh:
-        _refresh(data_dir, args.lookback_years)
+        _refresh(data_dir, args.lookback_years, state_dir)
 
     risk_settings = _json(args.risk_config)
     cfg = RiskConfig.from_dict(risk_settings["risk"])
@@ -78,7 +89,7 @@ def main(argv=None):
     paper_cfg = _json(args.paper_config)
 
     result = run_paper_day(
-        args.state_dir,
+        state_dir,
         targets,
         raw_prices,
         limits,
