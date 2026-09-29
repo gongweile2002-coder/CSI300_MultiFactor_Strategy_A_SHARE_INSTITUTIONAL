@@ -102,9 +102,35 @@ def stock_limits_for_date(stock_limits: pd.DataFrame | None, trade_date) -> pd.D
     if stock_limits is None or stock_limits.empty:
         return pd.DataFrame(columns=["date", "ticker", "up_limit", "down_limit"])
     x = stock_limits.copy()
+    required = {"date", "ticker", "up_limit", "down_limit"}
+    missing = required - set(x.columns)
+    if missing:
+        raise ValueError(f"stock_limits 缺少列: {sorted(missing)}")
     x["date"] = pd.to_datetime(x["date"], errors="raise").dt.normalize()
     x["ticker"] = x["ticker"].astype(str)
-    return x[x["date"] == _date(trade_date)].copy()
+    for col in ["up_limit", "down_limit"]:
+        x[col] = pd.to_numeric(x[col], errors="coerce")
+    day = x[x["date"] == _date(trade_date)].copy()
+    if day.duplicated("ticker").any():
+        raise ValueError("stock_limits 存在重复 date/ticker")
+    return day
+
+
+def price_limit_map_for_date(
+    stock_limits: pd.DataFrame | None,
+    trade_date,
+) -> dict[str, tuple[float, float]]:
+    day = stock_limits_for_date(stock_limits, trade_date)
+    out: dict[str, tuple[float, float]] = {}
+    for _, r in day.iterrows():
+        up, down = r["up_limit"], r["down_limit"]
+        if pd.isna(up) or pd.isna(down):
+            continue
+        up, down = float(up), float(down)
+        if up <= 0 or down <= 0 or down > up:
+            continue
+        out[str(r["ticker"])] = (up, down)
+    return out
 
 
 def _apply_open_constraints(
@@ -117,11 +143,7 @@ def _apply_open_constraints(
         return pd.DataFrame() if orders is None else orders.copy()
 
     out = orders.copy()
-    limits = stock_limits_for_date(stock_limits, trade_date)
-    limit_map = {
-        str(r["ticker"]): (r.get("up_limit"), r.get("down_limit"))
-        for _, r in limits.iterrows()
-    }
+    limit_map = price_limit_map_for_date(stock_limits, trade_date)
 
     for idx, row in out.iterrows():
         if str(row.get("status", "")) != "NEW":
@@ -132,13 +154,20 @@ def _apply_open_constraints(
             out.loc[idx, "status"] = "REJECTED"
             out.loc[idx, "reason"] = "no_exact_open_trade_bar"
             continue
+        if ticker not in limit_map:
+            out.loc[idx, "status"] = "REJECTED"
+            out.loc[idx, "reason"] = "missing_or_invalid_stock_limit_data"
+            continue
 
         px = float(exact_open[ticker])
-        up, down = limit_map.get(ticker, (None, None))
-        if side == "BUY" and pd.notna(up) and px >= float(up) - 1e-8:
+        up, down = limit_map[ticker]
+        if px > up + 1e-8 or px < down - 1e-8:
+            out.loc[idx, "status"] = "REJECTED"
+            out.loc[idx, "reason"] = "open_outside_price_limits"
+        elif side == "BUY" and px >= up - 1e-8:
             out.loc[idx, "status"] = "REJECTED"
             out.loc[idx, "reason"] = "limit_up"
-        elif side == "SELL" and pd.notna(down) and px <= float(down) + 1e-8:
+        elif side == "SELL" and px <= down + 1e-8:
             out.loc[idx, "status"] = "REJECTED"
             out.loc[idx, "reason"] = "limit_down"
 
@@ -304,6 +333,7 @@ def run_paper_day(
                 min_commission_cny=cfg["min_commission_cny"],
                 slippage_bps=cfg["slippage_bps"],
                 enforce_t_plus_one=cfg["enforce_t_plus_one"],
+                price_limits=price_limit_map_for_date(stock_limits, signal_date),
             )
 
     save_account(account, account_path)
