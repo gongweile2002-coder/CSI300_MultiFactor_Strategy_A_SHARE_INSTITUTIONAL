@@ -21,6 +21,20 @@ def _date(value) -> pd.Timestamp:
     return pd.Timestamp(value).normalize()
 
 
+def next_open_session(trade_calendar: pd.DataFrame, after_date) -> pd.Timestamp:
+    required = {"date", "is_open"}
+    missing = required - set(trade_calendar.columns)
+    if missing:
+        raise ValueError(f"trade_calendar 缺少列: {sorted(missing)}")
+    cal = trade_calendar.copy()
+    cal["date"] = pd.to_datetime(cal["date"], errors="raise").dt.normalize()
+    cal["is_open"] = pd.to_numeric(cal["is_open"], errors="raise").astype(int)
+    future = cal[(cal["date"] > _date(after_date)) & (cal["is_open"] == 1)]
+    if future.empty:
+        raise ValueError("交易日历中找不到下一开放交易日")
+    return pd.Timestamp(future["date"].min()).normalize()
+
+
 def _atomic_json(path: Path, obj: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -93,6 +107,44 @@ def stock_limits_for_date(stock_limits: pd.DataFrame | None, trade_date) -> pd.D
     return x[x["date"] == _date(trade_date)].copy()
 
 
+def _apply_open_constraints(
+    orders: pd.DataFrame,
+    exact_open: dict[str, float],
+    stock_limits: pd.DataFrame | None,
+    trade_date,
+) -> pd.DataFrame:
+    if orders is None or orders.empty:
+        return pd.DataFrame() if orders is None else orders.copy()
+
+    out = orders.copy()
+    limits = stock_limits_for_date(stock_limits, trade_date)
+    limit_map = {
+        str(r["ticker"]): (r.get("up_limit"), r.get("down_limit"))
+        for _, r in limits.iterrows()
+    }
+
+    for idx, row in out.iterrows():
+        if str(row.get("status", "")) != "NEW":
+            continue
+        ticker = str(row["ticker"])
+        side = str(row["side"])
+        if ticker not in exact_open:
+            out.loc[idx, "status"] = "REJECTED"
+            out.loc[idx, "reason"] = "no_exact_open_trade_bar"
+            continue
+
+        px = float(exact_open[ticker])
+        up, down = limit_map.get(ticker, (None, None))
+        if side == "BUY" and pd.notna(up) and px >= float(up) - 1e-8:
+            out.loc[idx, "status"] = "REJECTED"
+            out.loc[idx, "reason"] = "limit_up"
+        elif side == "SELL" and pd.notna(down) and px <= float(down) + 1e-8:
+            out.loc[idx, "status"] = "REJECTED"
+            out.loc[idx, "reason"] = "limit_down"
+
+    return out
+
+
 def _candidate_frame(targets: pd.DataFrame, signal_date) -> pd.DataFrame:
     required = {"ticker", "target_weight"}
     if not required <= set(targets):
@@ -133,6 +185,7 @@ def run_paper_day(
     stock_limits: pd.DataFrame | None,
     signal_report: dict[str, Any],
     config: dict[str, Any],
+    trade_calendar: pd.DataFrame,
     initial_cash: float = 500000.0,
 ) -> dict[str, Any]:
     """
@@ -147,7 +200,7 @@ def run_paper_day(
     state_dir.mkdir(parents=True, exist_ok=True)
     account_path = state_dir / "paper_account.json"
     state_path = state_dir / "state.json"
-    pending_path = state_dir / "pending_targets.csv"
+    pending_path = state_dir / "pending_intents.csv"
 
     signal_date = _date(signal_report["signal_date"])
     candidates = _candidate_frame(current_targets, signal_date)
@@ -161,6 +214,7 @@ def run_paper_day(
     raw = _ensure_raw_prices(raw_prices)
     if raw["date"].max() != signal_date:
         raise ValueError("raw_prices 未更新到当前 signal_date")
+    next_session = next_open_session(trade_calendar, signal_date)
 
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     if state.get("last_completed_signal_date") == str(signal_date.date()):
@@ -185,8 +239,8 @@ def run_paper_day(
 
     close_map = latest_close_map(raw, signal_date)
     exact_open = exact_price_map(raw, signal_date, "open")
-    planning_prices = close_map.copy()
-    planning_prices.update(exact_open)
+    risk_prices = close_map.copy()
+    risk_prices.update(exact_open)
 
     run_dir = state_dir / "runs" / str(signal_date.date())
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -199,33 +253,37 @@ def run_paper_day(
         pending_signal_date = _date(state["pending_signal_date"])
         if pending_signal_date >= signal_date:
             raise ValueError("待执行信号日期必须早于当前交易日")
-        pending = pd.read_csv(pending_path)
+        if not state.get("pending_execution_date"):
+            raise ValueError("pending state 缺少 expected execution date")
+
+        expected_execution = _date(state["pending_execution_date"])
+        if signal_date != expected_execution:
+            raise ValueError(
+                f"漏跑或错位交易日：expected={expected_execution.date()}, "
+                f"actual={signal_date.date()}"
+            )
+
+        orders = pd.read_csv(pending_path, dtype={"ticker": str})
+        if not orders.empty:
+            orders["trade_date"] = pd.to_datetime(
+                orders["trade_date"], errors="raise"
+            ).dt.normalize()
+            if not orders["trade_date"].eq(signal_date).all():
+                raise ValueError("pending intent 的 trade_date 与当前执行日不一致")
         executed_signal_date = str(pending_signal_date.date())
 
-        orders = generate_orders(
-            account,
-            pending,
-            planning_prices,
+        orders = _apply_open_constraints(
+            orders,
+            exact_open,
+            stock_limits,
             signal_date,
-            lot_size=cfg["lot_size"],
-            cash_buffer_pct=cfg["cash_buffer_pct"],
-            max_single_weight=cfg["max_single_weight"],
-            enforce_t_plus_one=cfg["enforce_t_plus_one"],
-            allow_short=cfg["allow_short"],
-            stock_limits=stock_limits_for_date(stock_limits, signal_date),
         )
 
         if not orders.empty:
-            no_open = ~orders["ticker"].astype(str).isin(exact_open)
-            actionable = orders["side"].isin(["BUY", "SELL"])
-            mask = no_open & actionable
-            orders.loc[mask, "status"] = "REJECTED"
-            orders.loc[mask, "reason"] = "no_exact_open_trade_bar"
-
             checks = pre_trade_checks(
                 account,
                 orders,
-                planning_prices,
+                risk_prices,
                 max_single_weight=cfg["max_single_weight"],
                 allow_short=cfg["allow_short"],
                 enforce_t_plus_one=cfg["enforce_t_plus_one"],
@@ -272,12 +330,34 @@ def run_paper_day(
         pos_hist["as_of"] = str(signal_date.date())
         _append_history(state_dir / "position_history.csv", pos_hist, ["as_of", "ticker"])
 
-    current_targets.to_csv(pending_path, index=False, encoding="utf-8-sig")
+    pending_intents = generate_orders(
+        account,
+        current_targets,
+        close_map,
+        next_session,
+        lot_size=cfg["lot_size"],
+        cash_buffer_pct=cfg["cash_buffer_pct"],
+        max_single_weight=cfg["max_single_weight"],
+        enforce_t_plus_one=cfg["enforce_t_plus_one"],
+        allow_short=cfg["allow_short"],
+        stock_limits=None,
+    )
+    pending_intents["source_signal_date"] = str(signal_date.date())
+    pending_intents["expected_execution_date"] = str(next_session.date())
+    pending_intents.to_csv(pending_path, index=False, encoding="utf-8-sig")
+    pending_intents.to_csv(
+        run_dir / "pending_intents.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
     state = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "REAL_DATA_PAPER_ONLY",
         "last_completed_signal_date": str(signal_date.date()),
         "pending_signal_date": str(signal_date.date()),
+        "pending_execution_date": str(next_session.date()),
+        "pending_intent_count": int(len(pending_intents)),
         "executed_signal_date": executed_signal_date,
         "account_id": account["account_id"],
         "real_broker_submission": False,
@@ -293,5 +373,7 @@ def run_paper_day(
         "nav": float(summary.iloc[0]["nav"]),
         "cash": float(summary.iloc[0]["cash"]),
         "positions": int(summary.iloc[0]["n_positions"]),
+        "pending_intents": int(len(pending_intents)),
+        "pending_execution_date": str(next_session.date()),
         "state_dir": str(state_dir),
     }
