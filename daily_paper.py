@@ -74,6 +74,7 @@ def main(argv=None):
     targets = pd.read_csv(signal_dir / "targets.csv", dtype={"ticker": str})
     raw_prices = pd.read_csv(data_dir / "raw_prices.csv", dtype={"ticker": str})
     limits = pd.read_csv(data_dir / "stock_limits.csv", dtype={"ticker": str})
+    trade_calendar = pd.read_csv(data_dir / "trade_calendar.csv")
     paper_cfg = _json(args.paper_config)
 
     result = run_paper_day(
@@ -83,6 +84,7 @@ def main(argv=None):
         limits,
         report,
         paper_cfg,
+        trade_calendar,
         initial_cash=args.initial_cash,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
