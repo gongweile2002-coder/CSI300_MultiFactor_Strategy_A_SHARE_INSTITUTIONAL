@@ -4,6 +4,7 @@ from update_live_data import (
     _financial_rows_by_announcement,
     merge_frame,
     raw_to_adjusted,
+    required_market_data_universe,
 )
 
 
@@ -90,3 +91,18 @@ def test_incremental_financial_fetch_includes_weekend_announcements():
 
     assert "20260927" in {c["ann_date"] for c in dl.pro.calls}
     assert not out.empty
+
+
+def test_market_data_universe_keeps_removed_holdings_and_pending_names():
+    current = {"000001.SZ", "000002.SZ"}
+    prior = {"000001.SZ", "600000.SH"}
+    paper_required = {"600000.SH", "300001.SZ"}
+
+    out = required_market_data_universe(current, prior, paper_required)
+
+    assert out == {
+        "000001.SZ",
+        "000002.SZ",
+        "600000.SH",
+        "300001.SZ",
+    }
