@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from .paper_ledger_v10 import PaperLedger, signal_bundle_hash
 from .paper_trading_v7 import (
     execute_orders,
     generate_orders,
@@ -13,7 +14,6 @@ from .paper_trading_v7 import (
     load_account,
     pre_trade_checks,
     reconcile,
-    save_account,
 )
 
 
@@ -216,6 +216,7 @@ def run_paper_day(
     config: dict[str, Any],
     trade_calendar: pd.DataFrame,
     initial_cash: float = 500000.0,
+    fault_point: str | None = None,
 ) -> dict[str, Any]:
     """
     Post-close paper session.
@@ -227,9 +228,8 @@ def run_paper_day(
     """
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
-    account_path = state_dir / "paper_account.json"
-    state_path = state_dir / "state.json"
-    pending_path = state_dir / "pending_intents.csv"
+    account_id = "PAPER-CSI300-LIVE"
+    ledger = PaperLedger(state_dir / "paper.sqlite3")
 
     signal_date = _date(signal_report["signal_date"])
     candidates = _candidate_frame(current_targets, signal_date)
@@ -244,41 +244,44 @@ def run_paper_day(
     if raw["date"].max() != signal_date:
         raise ValueError("raw_prices 未更新到当前 signal_date")
     next_session = next_open_session(trade_calendar, signal_date)
+    signal_hash = signal_bundle_hash(current_targets, signal_date)
 
-    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-    if state.get("last_completed_signal_date") == str(signal_date.date()):
-        nav_path = state_dir / "nav_history.csv"
-        latest_nav = None
-        if nav_path.exists():
-            hist = pd.read_csv(nav_path)
-            if not hist.empty:
-                latest_nav = float(hist.iloc[-1]["nav"])
+    existing_run = ledger.get_run(account_id, signal_date)
+    if existing_run is not None:
+        if existing_run["signal_hash"] != signal_hash:
+            raise ValueError(
+                "同一 signal_date 已提交不同 signal bundle，禁止静默覆盖"
+            )
+        ledger.export(state_dir, account_id, signal_date)
         return {
             "status": "IDEMPOTENT",
             "signal_date": str(signal_date.date()),
             "orders": 0,
             "fills": 0,
-            "nav": latest_nav,
+            "nav": ledger.last_nav(account_id),
         }
 
+    state = ledger.load_state(account_id)
     cfg = _paper_cfg(config)
-    account = load_account(account_path) if account_path.exists() else init_account(
-        float(initial_cash), signal_date, account_id="PAPER-CSI300-LIVE"
-    )
+    account = ledger.load_account(account_id)
+    if account is None:
+        account = init_account(
+            float(initial_cash),
+            signal_date,
+            account_id=account_id,
+        )
+    pending = ledger.load_pending(account_id)
 
     close_map = latest_close_map(raw, signal_date)
     exact_open = exact_price_map(raw, signal_date, "open")
     risk_prices = close_map.copy()
     risk_prices.update(exact_open)
 
-    run_dir = state_dir / "runs" / str(signal_date.date())
-    run_dir.mkdir(parents=True, exist_ok=True)
-
     orders = pd.DataFrame()
     fills = pd.DataFrame()
     executed_signal_date = None
 
-    if pending_path.exists() and state.get("pending_signal_date"):
+    if not pending.empty and state.get("pending_signal_date"):
         pending_signal_date = _date(state["pending_signal_date"])
         if pending_signal_date >= signal_date:
             raise ValueError("待执行信号日期必须早于当前交易日")
@@ -292,7 +295,7 @@ def run_paper_day(
                 f"actual={signal_date.date()}"
             )
 
-        orders = pd.read_csv(pending_path, dtype={"ticker": str})
+        orders = pending.copy()
         if not orders.empty:
             orders["trade_date"] = pd.to_datetime(
                 orders["trade_date"], errors="raise"
@@ -336,29 +339,7 @@ def run_paper_day(
                 price_limits=price_limit_map_for_date(stock_limits, signal_date),
             )
 
-    save_account(account, account_path)
     summary, positions = reconcile(account, close_map, signal_date)
-
-    candidates.to_csv(run_dir / "candidates.csv", index=False, encoding="utf-8-sig")
-    orders.to_csv(run_dir / "orders.csv", index=False, encoding="utf-8-sig")
-    fills.to_csv(run_dir / "fills.csv", index=False, encoding="utf-8-sig")
-    summary.to_csv(run_dir / "account_summary.csv", index=False, encoding="utf-8-sig")
-    positions.to_csv(run_dir / "positions.csv", index=False, encoding="utf-8-sig")
-
-    _append_history(state_dir / "candidate_history.csv", candidates, ["signal_date", "ticker"])
-    if not orders.empty:
-        _append_history(state_dir / "order_history.csv", orders, ["order_id"])
-    if not fills.empty:
-        _append_history(state_dir / "fill_history.csv", fills, ["fill_id"])
-
-    nav_row = summary.copy()
-    nav_row["as_of"] = str(signal_date.date())
-    _append_history(state_dir / "nav_history.csv", nav_row, ["as_of"])
-
-    pos_hist = positions.copy()
-    if not pos_hist.empty:
-        pos_hist["as_of"] = str(signal_date.date())
-        _append_history(state_dir / "position_history.csv", pos_hist, ["as_of", "ticker"])
 
     pending_intents = generate_orders(
         account,
@@ -374,12 +355,6 @@ def run_paper_day(
     )
     pending_intents["source_signal_date"] = str(signal_date.date())
     pending_intents["expected_execution_date"] = str(next_session.date())
-    pending_intents.to_csv(pending_path, index=False, encoding="utf-8-sig")
-    pending_intents.to_csv(
-        run_dir / "pending_intents.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
 
     state = {
         "schema_version": 2,
@@ -392,7 +367,25 @@ def run_paper_day(
         "account_id": account["account_id"],
         "real_broker_submission": False,
     }
-    _atomic_json(state_path, state)
+
+    commit_status = ledger.commit_day(
+        account_id=account_id,
+        signal_date=signal_date,
+        signal_hash=signal_hash,
+        executed_signal_date=executed_signal_date,
+        account=account,
+        state=state,
+        pending_intents=pending_intents,
+        candidates=candidates,
+        orders=orders,
+        fills=fills,
+        summary=summary,
+        positions=positions,
+        fault_point=fault_point,
+    )
+    if commit_status != "OK":
+        raise RuntimeError(f"unexpected ledger commit status: {commit_status}")
+    ledger.export(state_dir, account_id, signal_date)
 
     return {
         "status": "OK",
