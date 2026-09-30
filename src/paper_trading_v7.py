@@ -351,6 +351,12 @@ def _commission(notional, commission_bps, min_commission):
     return max(float(min_commission), notional*float(commission_bps)/10000.0)
 
 
+def _transfer_fee(notional, transfer_fee_bps):
+    if notional <= 0:
+        return 0.0
+    return float(notional) * float(transfer_fee_bps) / 10000.0
+
+
 def _consume_fifo_lots(account, ticker, qty_to_sell, sell_price, trade_date, enforce_t_plus_one):
     p = account["positions"].setdefault(ticker, {"lots":[]})
     lots = p.get("lots", [])
@@ -390,6 +396,7 @@ def execute_orders(
     commission_bps=3.0,
     min_commission_cny=5.0,
     slippage_bps=2.0,
+    transfer_fee_bps=0.0,
     enforce_t_plus_one=True,
     price_limits=None,
 ):
@@ -454,8 +461,9 @@ def execute_orders(
 
         notional = qty*fill_price
         commission = _commission(notional, commission_bps, min_commission_cny)
+        transfer_fee = _transfer_fee(notional, transfer_fee_bps)
         stamp = notional*stamp_duty_rate(trade_date) if side=="SELL" else 0.0
-        total_fee = commission + stamp
+        total_fee = commission + transfer_fee + stamp
 
         if side == "SELL":
             available = sellable_qty(account, ticker, trade_date, enforce_t_plus_one)
@@ -464,8 +472,9 @@ def execute_orders(
                 continue
             notional = qty_exec*fill_price
             commission = _commission(notional, commission_bps, min_commission_cny)
+            transfer_fee = _transfer_fee(notional, transfer_fee_bps)
             stamp = notional*stamp_duty_rate(trade_date)
-            total_fee = commission+stamp
+            total_fee = commission + transfer_fee + stamp
 
             sold, realized = _consume_fifo_lots(
                 account, ticker, qty_exec, fill_price, trade_date, enforce_t_plus_one
@@ -479,7 +488,7 @@ def execute_orders(
             qty_exec = sold
 
         else:
-            total_cash_needed = notional+commission
+            total_cash_needed = notional + commission + transfer_fee
             if total_cash_needed > float(account["cash"]) + 1e-8:
                 # Reduce to maximum affordable board lots.
                 lot_size = 100
@@ -489,21 +498,22 @@ def execute_orders(
                     continue
                 notional = qty_exec*fill_price
                 commission = _commission(notional, commission_bps, min_commission_cny)
-                total_cash_needed = notional+commission
+                transfer_fee = _transfer_fee(notional, transfer_fee_bps)
+                total_cash_needed = notional + commission + transfer_fee
                 if total_cash_needed > float(account["cash"]) + 1e-8:
                     continue
             else:
                 qty_exec = qty
 
             account["cash"] -= total_cash_needed
-            account["fees_paid"] = float(account.get("fees_paid",0.0))+commission
+            total_fee = commission + transfer_fee
+            account["fees_paid"] = float(account.get("fees_paid",0.0)) + total_fee
             p = account["positions"].setdefault(ticker, {"lots":[]})
             p["lots"].append({
                 "qty": int(qty_exec),
                 "price": float(fill_price),
                 "acquired_date": str(trade_date.date()),
             })
-            total_fee = commission
             stamp = 0.0
 
         account["trade_seq"] = int(account.get("trade_seq",0))+1
@@ -519,6 +529,7 @@ def execute_orders(
             "price_limit_bounded": bool(price_limit_bounded),
             "notional": float(qty_exec*fill_price),
             "commission": float(commission),
+            "transfer_fee": float(transfer_fee),
             "stamp_duty": float(stamp),
             "total_fee": float(total_fee),
         })

@@ -203,6 +203,9 @@ def _paper_cfg(config: dict[str, Any]) -> dict[str, Any]:
         "allow_short": bool(config.get("paper_allow_short", False)),
         "commission_bps": float(config.get("paper_commission_bps", 3.0)),
         "min_commission_cny": float(config.get("paper_min_commission_cny", 5.0)),
+        "transfer_fee_bps": float(
+            config.get("paper_transfer_fee_bps", config.get("transfer_fee_bps", 0.0))
+        ),
         "slippage_bps": float(config.get("paper_slippage_bps", 2.0)),
     }
 
@@ -335,6 +338,7 @@ def run_paper_day(
                 commission_bps=cfg["commission_bps"],
                 min_commission_cny=cfg["min_commission_cny"],
                 slippage_bps=cfg["slippage_bps"],
+                transfer_fee_bps=cfg["transfer_fee_bps"],
                 enforce_t_plus_one=cfg["enforce_t_plus_one"],
                 price_limits=price_limit_map_for_date(stock_limits, signal_date),
             )

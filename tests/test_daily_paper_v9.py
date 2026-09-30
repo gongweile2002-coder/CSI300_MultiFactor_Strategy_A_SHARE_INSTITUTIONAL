@@ -12,6 +12,7 @@ def _config():
         "paper_lot_size": 100,
         "paper_commission_bps": 0,
         "paper_min_commission_cny": 0,
+        "paper_transfer_fee_bps": 0,
         "paper_slippage_bps": 0,
         "paper_cash_buffer_pct": 0,
         "paper_max_single_weight": 0.8,
@@ -399,3 +400,46 @@ def test_crash_before_sqlite_commit_does_not_double_book(tmp_path):
     fills = pd.read_csv(tmp_path / "fill_history.csv")
     assert len(fills) == 1
     assert fills["fill_id"].nunique() == 1
+
+
+def test_transfer_fee_is_charged_and_audited_on_buy(tmp_path):
+    cfg = _config()
+    cfg["paper_transfer_fee_bps"] = 1.0
+
+    day1 = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "target_weight": 0.5,
+        "signal_date": "2026-09-01",
+        "source": "real",
+    }])
+    run_paper_day(
+        tmp_path,
+        day1,
+        _raw()[lambda x: x["date"] == "2026-09-01"],
+        pd.DataFrame(),
+        {"signal_date": "2026-09-01"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    day2 = day1.copy()
+    day2["signal_date"] = "2026-09-02"
+    raw_to_day2 = _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])]
+    result = run_paper_day(
+        tmp_path,
+        day2,
+        raw_to_day2,
+        _limits(),
+        {"signal_date": "2026-09-02"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    fills = pd.read_csv(tmp_path / "fill_history.csv")
+    fill = fills.iloc[0]
+    assert float(fill["notional"]) == pytest.approx(55000.0)
+    assert float(fill["transfer_fee"]) == pytest.approx(5.5)
+    assert float(fill["total_fee"]) == pytest.approx(5.5)
+    assert result["cash"] == pytest.approx(44994.5)
