@@ -2,6 +2,21 @@ name: Manual A-share paper validation
 
 on:
   workflow_dispatch:
+  # Pre-merge real-data validation for this owned feature branch. This is
+  # intentionally branch-scoped: repository secrets are never exposed to PRs
+  # from forks, and the job has read-only repository permissions.
+  push:
+    branches:
+      - feature/live-data-paper-v9-3
+    paths:
+      - ".github/workflows/daily-paper.yml"
+      - "daily_paper.py"
+      - "download_live_data.py"
+      - "update_live_data.py"
+      - "src/**"
+      - "config.example.json"
+      - "config/live.example.json"
+      - "requirements*.txt"
 
 permissions:
   contents: read
