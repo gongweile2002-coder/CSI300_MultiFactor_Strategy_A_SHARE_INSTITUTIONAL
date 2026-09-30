@@ -38,6 +38,7 @@ outputs/*
 data/real/
 data/live/
 data/raw/
+paper/live/
 
 # Local logs / temp files
 *.log

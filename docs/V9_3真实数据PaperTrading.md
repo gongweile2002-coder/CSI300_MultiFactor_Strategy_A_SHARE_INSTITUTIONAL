@@ -33,13 +33,13 @@ python daily_paper.py status
 
 ## GitHub Actions
 
-当前仓库是公开仓库，因此 `.github/workflows/daily-paper.yml` **不再做定时 Paper Trading，也不把 Paper 状态提交回 Git**。它只提供合并到默认分支后的手动、临时验收：在 runner 临时目录里完成 Tushare 数据刷新、候选生成、SQLite Paper run 和 broker-disabled 检查，任务结束后状态即丢弃。
+当前仓库是公开仓库，因此 `.github/workflows/daily-paper.yml` **不做定时 Paper Trading，也不把 Paper 状态提交回 Git**。为解决 `workflow_dispatch` 仅在默认分支可直接触发的限制，当前 owned feature 分支上的相关代码 push 会自动触发一次临时验收；合并到默认分支后也可以手动触发。验收只在 runner 临时目录里完成 Tushare 数据刷新、候选生成、SQLite Paper run 和 broker-disabled 检查，任务结束后状态即丢弃。
 
 在仓库 **Settings → Secrets and variables → Actions** 新增：
 
 `TUSHARE_TOKEN`
 
-Secret 只注入确实需要访问 Tushare 的 step；workflow 的 `GITHUB_TOKEN` 只有 `contents: read`。不要把 token 写入仓库文件，也不要把真实 pending intents、持仓或 fill history 提交到公开仓库。
+Secret 只注入确实需要访问 Tushare 的 step；workflow 的 `GITHUB_TOKEN` 只有 `contents: read`。不要把 token 写入仓库文件，也不要把真实 pending intents、持仓或 fill history 提交到公开仓库。`paper/live/` 已加入仓库 `.gitignore`，降低本地状态误提交风险。
 
 要做连续 forward shadow，请在本机持续保留 `paper/live/paper.sqlite3`，或者把 ledger 放入私有、持久、可备份的状态存储；不要依赖 GitHub Actions cache 充当权威账本。
 

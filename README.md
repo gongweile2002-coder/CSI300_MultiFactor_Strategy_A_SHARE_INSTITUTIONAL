@@ -41,12 +41,12 @@ python live.py doctor
 - D 日收盘后先用 D close 固定下一开放交易日的 share intents；D+1 的 raw open 只决定 fill price，不再反推股数。漏跑预期执行日会停止，而不是静默改用更晚的 open。
 - 执行层对缺失涨跌停数据采取 fail-closed，并保证滑点后的模拟成交价不越过合法涨跌停区间。
 - 指数换样后，行情增量集合继续覆盖 current constituents、上一快照以及 Paper 持仓/待执行股票，避免旧持仓失去行情。
-- `.github/workflows/daily-paper.yml` 在公开仓库中仅保留**手动、临时、只读**的数据链路验收；不会定时运行、不会提交 Paper ledger、不会把候选/持仓/成交写回公开仓库。需要仓库 Actions Secret `TUSHARE_TOKEN`。
+- `.github/workflows/daily-paper.yml` 在公开仓库中仅做**临时、只读**的数据链路验收：同仓库 feature 分支相关代码 push 会自动触发；合并到默认分支后也可手动触发。它不会定时运行、不会提交 Paper ledger、不会把候选/持仓/成交写回公开仓库。需要仓库 Actions Secret `TUSHARE_TOKEN`。
 - **不会调用券商接口**，`live_enabled=false` 仍保持默认关闭。
 
 详细说明见 [v9.3 真实数据 Paper Trading](docs/V9_3真实数据PaperTrading.md)。
 
-本层使用 Tushare 日线 raw open/close 做前向纸面成交，不是 tick 级实时撮合；因此它用于验证数据、信号和执行流程，不代表真实成交能力或真实投资业绩。公开仓库不适合作为持久 Paper 状态仓库；连续 forward shadow 应在本地或私有持久存储中运行。
+本层使用 Tushare 日线 raw open/close 做前向纸面成交，不是 tick 级实时撮合；因此它用于验证数据、信号和执行流程，不代表真实成交能力或真实投资业绩。公开仓库不适合作为持久 Paper 状态仓库；连续 forward shadow 应在本地或私有持久存储中运行。`paper/live/` 已加入 `.gitignore`，避免本地候选、持仓、成交和账本导出被误提交到公开仓库。
 
 ## v9.2 新增实盘安全层
 
