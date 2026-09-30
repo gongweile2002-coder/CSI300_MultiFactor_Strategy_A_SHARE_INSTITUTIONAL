@@ -443,3 +443,80 @@ def test_transfer_fee_is_charged_and_audited_on_buy(tmp_path):
     assert float(fill["transfer_fee"]) == pytest.approx(5.5)
     assert float(fill["total_fee"]) == pytest.approx(5.5)
     assert result["cash"] == pytest.approx(44994.5)
+
+
+def test_corporate_action_entitlement_uses_record_date_snapshot(tmp_path):
+    cfg = _config()
+    day1 = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "target_weight": 0.5,
+        "signal_date": "2026-09-01",
+        "source": "real",
+    }])
+    run_paper_day(
+        tmp_path,
+        day1,
+        _raw()[lambda x: x["date"] == "2026-09-01"],
+        pd.DataFrame(),
+        {"signal_date": "2026-09-01"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    day2 = day1.copy()
+    day2["signal_date"] = "2026-09-02"
+    run_paper_day(
+        tmp_path,
+        day2,
+        _raw()[lambda x: x["date"].isin(["2026-09-01", "2026-09-02"])],
+        _limits(),
+        {"signal_date": "2026-09-02"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+    )
+
+    action = pd.DataFrame([{
+        "ticker": "000001.SZ",
+        "end_date": "2025-12-31",
+        "ann_date": "2026-08-20",
+        "div_proc": "实施",
+        "stk_div": 0.0,
+        "stk_bo_rate": 0.0,
+        "stk_co_rate": 0.0,
+        "cash_div": 0.1,
+        "cash_div_tax": 0.12,
+        "record_date": "2026-09-02",
+        "ex_date": "2026-09-03",
+        "pay_date": "2026-09-04",
+        "div_listdate": None,
+        "imp_ann_date": "2026-08-25",
+        "base_date": "2026-09-02",
+        "base_share": 100000.0,
+    }])
+
+    day3 = day1.copy()
+    day3["signal_date"] = "2026-09-03"
+    result = run_paper_day(
+        tmp_path,
+        day3,
+        _raw(),
+        _limits(),
+        {"signal_date": "2026-09-03"},
+        cfg,
+        _calendar(),
+        initial_cash=100000,
+        corporate_actions=action,
+    )
+
+    assert result["status"] == "OK"
+    account = json.loads((tmp_path / "paper_account.json").read_text(encoding="utf-8"))
+    receivables = list(account["cash_receivables"].values())
+    assert len(receivables) == 1
+    assert float(receivables[0]["amount"]) == pytest.approx(500.0)
+
+    history = pd.read_csv(tmp_path / "corporate_action_history.csv")
+    entitlement = history[history["event_type"] == "ENTITLEMENT"].iloc[0]
+    assert int(entitlement["eligible_qty"]) == 5000
+    assert float(entitlement["cash_amount"]) == pytest.approx(500.0)

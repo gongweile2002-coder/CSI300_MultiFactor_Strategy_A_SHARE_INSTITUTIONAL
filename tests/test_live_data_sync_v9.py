@@ -1,6 +1,7 @@
 import pandas as pd
 
 from update_live_data import (
+    _corporate_actions_by_ex_date,
     _financial_rows_by_announcement,
     merge_frame,
     raw_to_adjusted,
@@ -106,3 +107,76 @@ def test_market_data_universe_keeps_removed_holdings_and_pending_names():
         "600000.SH",
         "300001.SZ",
     }
+
+
+class _FakeDividendPro:
+    def __init__(self):
+        self.calls = []
+
+    def dividend(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("ex_date") != "20260902":
+            return pd.DataFrame()
+        return pd.DataFrame([
+            {
+                "ts_code": "000001.SZ",
+                "end_date": "20251231",
+                "ann_date": "20260820",
+                "div_proc": "实施",
+                "stk_div": 0.0,
+                "stk_bo_rate": 0.0,
+                "stk_co_rate": 0.0,
+                "cash_div": 0.1,
+                "cash_div_tax": 0.12,
+                "record_date": "20260901",
+                "ex_date": "20260902",
+                "pay_date": "20260904",
+                "div_listdate": None,
+                "imp_ann_date": "20260825",
+                "base_date": "20260901",
+                "base_share": 100000.0,
+            },
+            {
+                "ts_code": "600000.SH",
+                "end_date": "20251231",
+                "ann_date": "20260820",
+                "div_proc": "实施",
+                "stk_div": 0.0,
+                "stk_bo_rate": 0.0,
+                "stk_co_rate": 0.0,
+                "cash_div": 0.2,
+                "cash_div_tax": 0.24,
+                "record_date": "20260901",
+                "ex_date": "20260902",
+                "pay_date": "20260904",
+                "div_listdate": None,
+                "imp_ann_date": "20260825",
+                "base_date": "20260901",
+                "base_share": 100000.0,
+            },
+        ])
+
+
+class _FakeDividendDownloader:
+    def __init__(self):
+        self.pro = _FakeDividendPro()
+        self.pause_count = 0
+
+    def _pause(self):
+        self.pause_count += 1
+
+
+def test_incremental_corporate_actions_fetch_by_ex_date_and_filter_universe():
+    dl = _FakeDividendDownloader()
+    out = _corporate_actions_by_ex_date(
+        dl,
+        [pd.Timestamp("2026-09-02")],
+        {"000001.SZ"},
+    )
+
+    assert len(dl.pro.calls) == 1
+    assert dl.pro.calls[0]["ex_date"] == "20260902"
+    assert set(out["ticker"]) == {"000001.SZ"}
+    assert out.iloc[0]["div_proc"] == "实施"
+    assert float(out.iloc[0]["cash_div"]) == 0.1
+    assert pd.Timestamp(out.iloc[0]["record_date"]) == pd.Timestamp("2026-09-01")

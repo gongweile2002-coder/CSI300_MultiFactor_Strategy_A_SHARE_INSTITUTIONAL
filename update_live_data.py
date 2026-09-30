@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.corporate_actions_v10 import normalize_corporate_actions
 from src.data_contract_v8 import load_verified_dataset, normalize_tushare_prices
 from src.live_v8 import TradingCalendar, require
 from src.paper_ledger_v10 import PaperLedger
@@ -178,6 +179,40 @@ def _financial_history_rows(
     return _normalize_financial_rows(frames)
 
 
+
+_DIVIDEND_FIELDS = (
+    "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,"
+    "cash_div,cash_div_tax,record_date,ex_date,pay_date,div_listdate,"
+    "imp_ann_date,base_date,base_share"
+)
+
+
+def _corporate_actions_by_ex_date(
+    dl: TushareDownloaderV4,
+    sessions: list[pd.Timestamp],
+    tickers: set[str],
+) -> pd.DataFrame:
+    """Fetch ex-date actions without scanning every stock on every daily refresh."""
+    frames: list[pd.DataFrame] = []
+    for session in sessions:
+        ex_date = _yyyymmdd(session)
+        df = dl.pro.dividend(ex_date=ex_date, fields=_DIVIDEND_FIELDS)
+        dl._pause()
+        if df is None or df.empty:
+            continue
+        if len(df) >= 2000:
+            raise RuntimeError(
+                f"{session.date()}: dividend 达到单次 2000 行上限，不能确认完整性"
+            )
+        if "ts_code" not in df.columns:
+            raise RuntimeError(f"{session.date()}: dividend 缺少 ts_code")
+        df = df[df["ts_code"].astype(str).isin(set(tickers))].copy()
+        if not df.empty:
+            frames.append(df)
+    raw = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return normalize_corporate_actions(raw)
+
+
 def _ticker_backfill(dl: TushareDownloaderV4, ticker: str, start, end):
     daily = dl.pro.daily(ts_code=ticker, start_date=_yyyymmdd(start), end_date=_yyyymmdd(end))
     dl._pause()
@@ -263,6 +298,7 @@ def _manifest(
         "prices.csv", "raw_prices.csv", "trade_calendar.csv", "daily_basic.csv",
         "fundamentals_raw.csv", "index_membership.csv", "stock_metadata.csv",
         "industry_membership.csv", "st_status.csv", "benchmark.csv", "stock_limits.csv",
+        "corporate_actions.csv",
     ]
     now = pd.Timestamp.now(tz="Asia/Shanghai")
     return {
@@ -283,6 +319,7 @@ def _manifest(
             "financials": "ann_date strictly before signal_date",
             "index_membership": "latest effective_date not after signal_date",
             "industry": "in_date/out_date active on signal_date",
+            "corporate_actions": "implemented distributions applied on ex_date using the ledger record-date snapshot",
             "execution": "signal generated after close; paper fill uses next completed session raw open",
         },
         "refresh_mode": "incremental",
@@ -421,6 +458,22 @@ def main(argv=None):
     limits_old = _read(output / "stock_limits.csv", ["date"])
     limits = merge_frame(limits_old, limit_new, ["date", "ticker"], ["date", "ticker"])
     limits.to_csv(output / "stock_limits.csv", index=False)
+
+    corporate_old = normalize_corporate_actions(
+        _read(output / "corporate_actions.csv")
+    )
+    corporate_new = _corporate_actions_by_ex_date(
+        dl,
+        sessions,
+        market_universe,
+    )
+    corporate_actions = merge_frame(
+        corporate_old,
+        corporate_new,
+        ["action_id"],
+        ["ex_date", "ticker", "action_id"],
+    )
+    corporate_actions.to_csv(output / "corporate_actions.csv", index=False)
 
     financial_old = _read(output / "fundamentals_raw.csv", ["ann_date", "report_date"])
     financial_new = _financial_rows_by_announcement(

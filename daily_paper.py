@@ -86,6 +86,15 @@ def main(argv=None):
     raw_prices = pd.read_csv(data_dir / "raw_prices.csv", dtype={"ticker": str})
     limits = pd.read_csv(data_dir / "stock_limits.csv", dtype={"ticker": str})
     trade_calendar = pd.read_csv(data_dir / "trade_calendar.csv")
+    corporate_actions_path = data_dir / "corporate_actions.csv"
+    if not corporate_actions_path.exists():
+        raise FileNotFoundError(
+            "缺少 corporate_actions.csv；请先运行 daily_paper.py run --refresh"
+        )
+    corporate_actions = pd.read_csv(
+        corporate_actions_path,
+        dtype={"ticker": str, "ts_code": str},
+    )
     paper_cfg = _json(args.paper_config)
 
     result = run_paper_day(
@@ -97,6 +106,7 @@ def main(argv=None):
         paper_cfg,
         trade_calendar,
         initial_cash=args.initial_cash,
+        corporate_actions=corporate_actions,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print("PAPER ONLY：未调用任何券商下单接口。")

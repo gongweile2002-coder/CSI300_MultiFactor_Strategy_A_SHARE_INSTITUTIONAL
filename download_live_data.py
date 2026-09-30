@@ -2,12 +2,41 @@
 import argparse,hashlib,json,os
 from pathlib import Path
 import pandas as pd
+from src.corporate_actions_v10 import normalize_corporate_actions
 from src.tushare_provider_v4 import TushareDownloaderV4
 from src.tushare_provider import _yyyymmdd
 from src.live_v8 import TradingCalendar,require
 from src.signals_v8 import last_completed_session
 
 BASE=Path(__file__).resolve().parent
+
+_DIVIDEND_FIELDS = (
+    "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,"
+    "cash_div,cash_div_tax,record_date,ex_date,pay_date,div_listdate,"
+    "imp_ann_date,base_date,base_share"
+)
+
+def fetch_corporate_actions(dl, tickers, start, end, output_dir):
+    frames = []
+    for ticker in tickers:
+        df = dl.pro.dividend(ts_code=ticker, fields=_DIVIDEND_FIELDS)
+        dl._pause()
+        if df is None or df.empty:
+            continue
+        if len(df) >= 2000:
+            raise RuntimeError(f"{ticker}: dividend 达到单次 2000 行上限，不能确认完整性")
+        frames.append(df)
+    raw = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    actions = normalize_corporate_actions(raw)
+    if not actions.empty:
+        start = pd.Timestamp(start).normalize()
+        end = pd.Timestamp(end).normalize()
+        actions = actions[
+            (actions["ex_date"] >= start) & (actions["ex_date"] <= end)
+        ].copy()
+    actions.to_csv(Path(output_dir) / "corporate_actions.csv", index=False)
+    return actions
+
 
 def load_env():
     p=BASE/'.env'
@@ -38,7 +67,9 @@ def main():
     tickers=sorted(mem['ticker'].unique());dl.fetch_stock_metadata()
     dl.fetch_prices_for_tickers(tickers,start,asof);dl.fetch_daily_basic_for_tickers(tickers,start,asof)
     dl.fetch_fundamentals_for_tickers(tickers,start-pd.Timedelta(days=800),asof)
-    dl.fetch_stock_limits_for_tickers(tickers,start,asof);dl.fetch_sw_industry_membership(tickers)
+    dl.fetch_stock_limits_for_tickers(tickers,start,asof)
+    fetch_corporate_actions(dl,tickers,start,asof,d)
+    dl.fetch_sw_industry_membership(tickers)
     # Historical ST data can require a higher Tushare permission tier. For the
     # live signal, stock_basic names still provide a conservative current-name
     # fallback; record the degraded provenance explicitly instead of pretending
@@ -53,7 +84,7 @@ def main():
         st_history_status = f"fallback_stock_basic_name:{type(exc).__name__}"
     dl.fetch_benchmark('399300.SZ',start,asof)
     files=['prices.csv','raw_prices.csv','trade_calendar.csv','daily_basic.csv','fundamentals_raw.csv','index_membership.csv',
-           'stock_metadata.csv','industry_membership.csv','st_status.csv','benchmark.csv','stock_limits.csv']
+           'stock_metadata.csv','industry_membership.csv','st_status.csv','benchmark.csv','stock_limits.csv','corporate_actions.csv']
     manifest={'schema_version':8,'source':'tushare','complete_universe':True,'as_of':str(asof.date()),
         'created_at':now.isoformat(),'ticker_count':len(tickers),'amount_unit':'CNY','volume_unit':'share',
         'membership_basis':'latest_available_index_weight_snapshot_not_exact_intramonth_changes',
@@ -62,6 +93,7 @@ def main():
             'financials':'ann_date strictly before signal_date',
             'index_membership':'latest effective_date not after signal_date',
             'industry':'in_date/out_date active on signal_date',
+            'corporate_actions':'implemented distributions applied on ex_date using the ledger record-date snapshot',
             'execution':'post-close signal; paper fills only on a later completed session raw open'
         },
         'refresh_mode':'full_bootstrap',

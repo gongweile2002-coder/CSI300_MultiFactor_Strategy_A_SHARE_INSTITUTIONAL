@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from .corporate_actions_v10 import apply_corporate_actions
 from .paper_ledger_v10 import PaperLedger, signal_bundle_hash
 from .paper_trading_v7 import (
     execute_orders,
@@ -220,6 +221,7 @@ def run_paper_day(
     trade_calendar: pd.DataFrame,
     initial_cash: float = 500000.0,
     fault_point: str | None = None,
+    corporate_actions: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """
     Post-close paper session.
@@ -274,6 +276,15 @@ def run_paper_day(
             account_id=account_id,
         )
     pending = ledger.load_pending(account_id)
+
+    account, corporate_action_events = apply_corporate_actions(
+        account,
+        corporate_actions,
+        signal_date,
+        account_id=account_id,
+        applied_action_ids=ledger.applied_corporate_action_ids(account_id),
+        position_qty_at=ledger.position_qty_on,
+    )
 
     close_map = latest_close_map(raw, signal_date)
     exact_open = exact_price_map(raw, signal_date, "open")
@@ -385,6 +396,7 @@ def run_paper_day(
         fills=fills,
         summary=summary,
         positions=positions,
+        corporate_action_events=corporate_action_events,
         fault_point=fault_point,
     )
     if commit_status != "OK":
