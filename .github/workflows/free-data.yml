@@ -1,0 +1,46 @@
+name: Free A-share data validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/free-data-v9-5]
+  pull_request:
+    branches: [feature/strategy-research-v9-4]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install free provider
+        run: python -m pip install baostock==0.9.4 pandas
+      - name: Probe anonymous real data
+        run: |
+          python -u - <<'PY'
+          import socket
+          import baostock as bs
+          socket.setdefaulttimeout(20)
+          login = bs.login()
+          assert login.error_code == "0", login.error_msg
+          def collect(name, result):
+              assert result.error_code == "0", name + ":" + result.error_msg
+              rows = []
+              while result.next():
+                  rows.append(result.get_row_data())
+              assert result.error_code == "0", name + ":" + result.error_msg
+              print(name, result.fields, "rows", len(rows), "first", rows[:1])
+              assert rows, name + ": empty"
+          collect("calendar", bs.query_trade_dates("2026-09-28", "2026-10-15"))
+          collect("members", bs.query_hs300_stocks("2026-09-30"))
+          collect("industry", bs.query_stock_industry("sh.600000", "2026-09-30"))
+          collect("profit", bs.query_profit_data("sh.600000", 2026, 2))
+          collect("growth", bs.query_growth_data("sh.600000", 2026, 2))
+          collect("balance", bs.query_balance_data("sh.600000", 2026, 2))
+          collect("dividend", bs.query_dividend_data("sh.600000", 2026, "operate"))
+          collect("raw", bs.query_history_k_data_plus("sh.600000", "date,code,open,high,low,close,preclose,volume,amount,turn,tradestatus,peTTM,pbMRQ,isST", "2026-09-28", "2026-09-30", adjustflag="3"))
+          bs.logout()
+          PY
