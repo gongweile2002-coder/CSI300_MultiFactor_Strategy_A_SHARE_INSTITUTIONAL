@@ -24,7 +24,9 @@ venv/
 # Local trading state / databases / runtime controls
 *.sqlite
 *.sqlite3
+*.sqlite3-*
 *.db
+*.db-*
 ops/KILL_SWITCH
 ops/*.sqlite
 ops/*.sqlite3
@@ -36,6 +38,9 @@ outputs/*
 data/real/
 data/live/
 data/raw/
+paper/live/
+paper/free/
+data/free/
 
 # Local logs / temp files
 *.log

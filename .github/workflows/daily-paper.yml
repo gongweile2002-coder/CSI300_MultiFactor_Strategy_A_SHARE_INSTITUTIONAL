@@ -1,0 +1,40 @@
+name: Manual A-share paper validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ashare-paper-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-free.txt
+      - name: Install free runtime
+        run: python -m pip install -r requirements-free.txt
+      - name: Validate free-data paper pipeline in ephemeral state
+        run: |
+          python -u daily_paper.py run --provider baostock --refresh \
+            --data "$RUNNER_TEMP/data/free" --signals "$RUNNER_TEMP/free_signal" \
+            --state-dir "$RUNNER_TEMP/paper_free_validation" --lookback-years 1
+          python daily_paper.py status --state-dir "$RUNNER_TEMP/paper_free_validation"
+      - name: Confirm broker submission remains disabled
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          cfg = json.loads(Path("config/free.example.json").read_text(encoding="utf-8"))
+          assert cfg.get("live_enabled") is False
+          print("FREE PAPER ONLY: live_enabled=false; no Tushare secret required")
+          PY

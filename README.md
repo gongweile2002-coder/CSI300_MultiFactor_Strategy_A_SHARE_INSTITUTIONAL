@@ -1,4 +1,10 @@
-# 沪深300多因子 · A股操作修订版 v9.2
+# 沪深300多因子 · v9.5 免费数据 + Paper Trading
+
+**现在默认使用BaoStock免费数据，无需Tushare Token或积分。** 安装 `requirements-free.txt` 后运行 `python daily_paper.py run --refresh`，再运行 `python daily_paper.py status` 查看账本。免费版数据、候选与连续账本分别在 `data/free`、`outputs/free_signal`、`paper/free`。
+
+GitHub **Actions → Free A-share data validation → 最新运行 → Summary** 可查看真实数据验收。工作流使用临时账本；连续跨日Paper请在本地保持同一个目录。免费版保留价值/质量/动量框架，使用不同的季度质量、行业与模拟执行口径，仅用于Paper。完整说明见 [v9.5 免费数据与Paper](docs/V9_5免费数据与Paper.md)。
+
+**v9.4 策略研究补充**：新增四个固定策略的统一比较入口，包含跳月动量、质量低波动、目标名单缓冲、费用压力测试和固定后段样本比较。先看 [v9.4 策略研究与对比](docs/V9_4策略研究与对比.md)。运行 `python strategy_lab.py --demo --output outputs/strategy_lab_demo` 检查合成数据流程；真实研究使用 `--data data/live` 和新的输出目录。本补充不改变现有 Paper/券商策略配置，不宣称真实收益改善。
 
 **v9.2：在 v9.1 选股分配修复的基础上强化真实委托安全层：计划默认 10 分钟失效、单批委托数量上限、SQLite 订单状态机（APPROVED → SUBMITTING → SUBMITTED/PARTIAL/FILLED）、本地现金/可卖股冻结记录、非法状态回退拦截、Kill Switch 在券商调用前落盘为 BLOCKED，并对旧 v8/v9.1 台账做无损字段迁移。先看 [Mac启动与 v9.2 升级](docs/Mac启动与V9_2升级.md)。本次 147 项离线测试通过，演示运行通过；未验证收益改善。**
 
@@ -29,6 +35,25 @@ python live.py doctor
 - [交易规则与接口依据](docs/交易规则与接口依据.md)：交易所、Tushare 和迅投原始文档。
 - `ops/validation_results.json`、`ops/validation_junit_v9_2.xml`：本次真实运行的软件测试记录。
 
+
+## v9.3：保留的Tushare原版链路
+
+新增一条与真实券商完全隔离的前向纸面交易链路：
+
+- `update_live_data.py`：首次完整 bootstrap，之后按最近完成交易日增量刷新 Tushare 数据；日线、复权因子、daily_basic 和涨跌停优先按交易日批量更新，新纳入成分再补历史。
+- 财务信号继续按公告日做 point-in-time 过滤；数据清单显式记录 PIT 规则和 ST 历史是否降级。
+- `daily_paper.py run --provider tushare --refresh`：收盘后生成当日真实候选；上一交易日候选只能在下一完成交易日使用真实未复权开盘价纸面成交，并用当日真实未复权收盘价记 NAV。
+- `paper/live/paper.sqlite3` 是权威 Paper ledger；JSON/CSV 仅作为导出与审计副本。账户、pending intents、orders、fills、NAV 与持仓在同一 SQLite 事务中提交，崩溃前未 COMMIT 的写入会回滚。
+- D 日收盘后先用 D close 固定下一开放交易日的 share intents；D+1 的 raw open 只决定 fill price，不再反推股数。漏跑预期执行日会停止，而不是静默改用更晚的 open。
+- 执行层对缺失涨跌停数据采取 fail-closed，并保证滑点后的模拟成交价不越过合法涨跌停区间。
+- 指数换样后，行情增量集合继续覆盖 current constituents、上一快照以及 Paper 持仓/待执行股票，避免旧持仓失去行情。
+- `.github/workflows/daily-paper.yml` 已在v9.5改用免费BaoStock数据，仅做**临时、只读**的手动验收，不需要Secret。Tushare原版改为显式本地入口。
+- **不会调用券商接口**，`live_enabled=false` 仍保持默认关闭。
+
+详细说明见 [v9.3 真实数据 Paper Trading](docs/V9_3真实数据PaperTrading.md)。
+
+本层使用 Tushare 日线 raw open/close 做前向纸面成交，不是 tick 级实时撮合；因此它用于验证数据、信号和执行流程，不代表真实成交能力或真实投资业绩。公开仓库不适合作为持久 Paper 状态仓库；连续 forward shadow 应在本地或私有持久存储中运行。`paper/live/` 已加入 `.gitignore`，避免本地候选、持仓、成交和账本导出被误提交到公开仓库。
+
 ## v9.2 新增实盘安全层
 
 - **限时计划**：`plan.json` 增加 `expires_at`；登记或提交时强制检查，默认 10 分钟。
@@ -50,7 +75,7 @@ python live.py doctor
 | 未区分复核、提交、部分成交、实际成交 | SQLite 持久状态机；APPROVED 不等于已提交；受理不记成交；超时为 UNKNOWN；未对账不重复发送 |
 | 缺少行情、可卖数量、行业等仍能继续操作 | 信息不足明确阻止；全部已有持仓都计入资金和风险约束 |
 
-## 当前启用的策略
+## 保留的原版策略（Tushare）
 
 v8 是**每日收盘后更新的固定核心策略**：沪深300历史成分并集下载，按当时可取得的最新成分快照选股；价值 30%、质量 40%、126 交易日动量 30%，执行行业和市值中性化。过滤 ST、退市风险、上市不足 180 个交易日、流动性较弱或资料不全的股票；最多 30 只，合格股票少于 15 只则停止。
 

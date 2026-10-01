@@ -45,6 +45,7 @@
   "paper_lot_size": 100,
   "paper_commission_bps": 3.0,
   "paper_min_commission_cny": 5.0,
+  "paper_transfer_fee_bps": 0.1,
   "paper_slippage_bps": 2.0,
   "paper_cash_buffer_pct": 0.01,
   "paper_max_single_weight": 0.1,

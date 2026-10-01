@@ -21,7 +21,7 @@ def test_signal_to_reviewed_orders(tmp_path,monkeypatch):
     days=pd.date_range(signal-pd.Timedelta(days=10),signal+pd.Timedelta(days=5))
     cal=TradingCalendar(pd.DataFrame({'date':days,'is_open':(days.weekday<5).astype(int)}))
     # Replace the authenticated-data contract in the test process only. Do not write a forged real-data manifest.
-    monkeypatch.setattr(m,'load_verified_dataset',lambda path:({'as_of':str(signal.date()),'membership_basis':'SYNTHETIC_FIXTURE'},cal))
+    monkeypatch.setattr(m,'load_verified_dataset',lambda path:({'as_of':str(signal.date()),'source':'SYNTHETIC_FIXTURE','membership_basis':'SYNTHETIC_FIXTURE'},cal))
     cfg=RiskConfig();out=tmp_path/'signal'
     report=m._generate_signals_unchecked(tmp_path,out,pd.Timestamp(str(signal.date())+'T18:00:00+08:00'),cfg)
     assert report['selected_names']>=15 and report['gross_target']<=.8+1e-8 and report['performance_validated'] is False

@@ -68,6 +68,7 @@ def audit_dataset(directory,now):
     except (ValueError,KeyError,TypeError,OSError) as exc:
         checks.append({'check':'manifest_and_hashes','status':'BLOCK','detail':str(exc)});return report
     checks.append({'check':'manifest_and_hashes','status':'PASS','detail':'必要文件和 SHA256 一致；不构成第三方真实性证明'})
+    report['source']=manifest['source']
     report['data_manifest_hash']=sha256(directory/'data_manifest_v8.json');report['as_of']=manifest.get('as_of')
     asof=pd.Timestamp(manifest['as_of'])
     check('latest_completed_session',lambda:require(asof==completed_date(calendar,now),'数据未更新到最近完整交易日'))
@@ -131,13 +132,23 @@ def audit_dataset(directory,now):
         benchmark=frames['benchmark.csv'];require(len(benchmark)>=120,'基准历史不足120期')
         closes=pd.to_numeric(benchmark['close'],errors='raise');require(np.isfinite(closes).all() and (closes>0).all(),'基准价格非法')
     check('financial_and_reference_contracts',reference_data)
+    if manifest['source']=='baostock':
+        def free_contract():
+            require(manifest.get('financial_metric_basis')=='roeAvg_YOYNI_liabilityToAsset_percent', '免费财务指标口径未知')
+            require(manifest.get('size_neutralization') is False, '免费版不能冒充每日总市值中性化')
+            require(manifest.get('limit_basis')=='derived_10pct_seasoned_non_st_main_paper_only', '免费涨跌停口径未知')
+            require(manifest.get('dividend_cash_policy')=='gross_less_flat_20pct_model_withholding', '免费分红税模型未知')
+            return 'BaoStock 免费 Paper 口径；派息税/特殊交易情形有模型限制，不能用于券商下单'
+        check('free_provider_contract',free_contract)
     report['status']='BLOCK' if any(x['status']=='BLOCK' for x in checks) else 'PASS'
     return report
 
 def publish_signal_manifest(directory,data_directory,cfg,now):
     directory=Path(directory);data_directory=Path(data_directory)
     report=json.loads((directory/'signal_report.json').read_text(encoding='utf-8'))
-    manifest={'schema_version':9,'kind':'real_signal_bundle','signal_date':report['signal_date'],
+    data=json.loads((data_directory/'data_manifest_v8.json').read_text(encoding='utf-8'))
+    kind='free_paper_signal_bundle' if data['source']=='baostock' else 'real_signal_bundle'
+    manifest={'schema_version':9,'kind':kind,'signal_date':report['signal_date'],
       'created_at':cn_timestamp(now).isoformat(),'config_hash':digest(asdict(cfg)),
       'data_manifest_hash':sha256(data_directory/'data_manifest_v8.json'),
       'files':{name:sha256(directory/name) for name in BUNDLE_FILES},'performance_validated':False}
