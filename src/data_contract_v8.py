@@ -26,7 +26,10 @@ def latest_financial_records(frame,signal_date,announcement_col='ann_date',perio
 
 def load_verified_dataset(directory):
     d=Path(directory);manifest=json.loads((d/'data_manifest_v8.json').read_text(encoding='utf-8'))
-    require(manifest.get('schema_version')==8 and manifest.get('source')=='tushare','缺少真实 v8 数据清单，先 download_live_data.py')
+    require(manifest.get('schema_version')==8 and manifest.get('source') in {'tushare','baostock'},'缺少真实 v8 数据清单，先下载所选数据源')
+    if manifest.get('source')=='baostock':
+        require(manifest.get('paper_only') is True and manifest.get('provider_contract')=='baostock_free_v1',
+                '免费数据必须使用已声明口径的 Paper 专用适配器')
     require(manifest.get('complete_universe') is True,'抽样股票池不能生成实盘信号')
     required={'prices.csv','raw_prices.csv','trade_calendar.csv','daily_basic.csv','fundamentals_raw.csv','index_membership.csv','stock_metadata.csv','industry_membership.csv','st_status.csv','benchmark.csv','stock_limits.csv'}
     require(required<=set(manifest['files']),'清单缺少必要数据文件')

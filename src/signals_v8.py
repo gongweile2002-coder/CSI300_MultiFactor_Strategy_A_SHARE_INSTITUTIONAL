@@ -73,12 +73,17 @@ def _generate_signals_unchecked(directory,output,now,cfg):
     ref['is_delisting']=ref['name'].fillna('').str.contains('退');ref['source']='real'
     panel=build_point_in_time_panel_v4(prices,db,financial,members,metadata=meta,industry_membership=industry,st_status=st,
           signal_dates_override=[signal],momentum_lookback_days=126,factor_weights={'value':.3,'quality':.4,'momentum':.3},
-          min_listing_trading_days=180,liquidity_min_quantile=.10,exclude_st=True)
+          min_listing_trading_days=180,liquidity_min_quantile=.10,exclude_st=True,
+          neutralize_market_cap=manifest.get('size_neutralization',True))
     require(not panel.empty,'缺少足够历史、财报或合格股票')
     panel=panel[(panel['valuation_date']==signal)&((signal-panel['ann_date']).dt.days<=200)].copy()
     panel=panel.merge(ref.drop(columns=['industry_l1','name','signal_date']),on='ticker',how='inner',validate='one_to_one')
     panel=panel[~panel['is_st']&~panel['is_delisting']&panel['ticker'].map(lambda t:board(t) in cfg.allowed_buy_boards)]
     panel=panel[panel['industry_l1'].notna()&~panel['industry_l1'].isin(['','UNKNOWN'])&np.isfinite(panel['composite_score'])]
+    if manifest['source']=='baostock':
+        limits=load('stock_limits.csv',['date'])
+        supported=set(limits.loc[limits['date']==signal,'ticker'])
+        panel=panel[panel['ticker'].isin(supported)]
     require(len(panel)>=15,'合格股票不足 15 只，停止生成实盘目标')
     benchmark=benchmark[benchmark['date']<=signal].sort_values('date')
     require(not benchmark['date'].duplicated().any() and len(benchmark)>=120 and benchmark['date'].max()==signal,'基准历史不足或未更新')
@@ -95,7 +100,13 @@ def _generate_signals_unchecked(directory,output,now,cfg):
     report={'signal_date':str(signal.date()),'eligible_names':len(panel),'selected_names':len(selected),
       'gross_target':float(sum(weights)),'cash_target':float(1-sum(weights)),
       'allocation_method':'ranked_positive_slots_sector_capped_v9_1','risk_regime':'ABOVE_MA120' if trend else 'BELOW_MA120',
-      'strategy':'fixed_core_value30_quality40_momentum30','performance_validated':False,
+      'strategy':('free_core_value30_quarterly_quality40_momentum30' if manifest['source']=='baostock'
+                  else 'fixed_core_value30_quality40_momentum30'),'performance_validated':False,
+      'data_source':manifest['source'],'paper_only':manifest.get('paper_only',False),
+      'financial_metric_basis':manifest.get('financial_metric_basis','tushare_fina_indicator'),
+      'size_neutralization':manifest.get('size_neutralization',True),
+      'limit_basis':manifest.get('limit_basis','vendor_stk_limit'),
+      'dividend_cash_policy':manifest.get('dividend_cash_policy','vendor_cash_div'),
       'membership_basis':manifest.get('membership_basis'),'financial_vintages':manifest.get('financial_vintages')}
     (out/'signal_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return report

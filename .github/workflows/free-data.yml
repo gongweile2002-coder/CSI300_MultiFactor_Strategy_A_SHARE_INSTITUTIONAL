@@ -1,46 +1,81 @@
 name: Free A-share data validation
+
 on:
   workflow_dispatch:
   push:
     branches: [feature/free-data-v9-5]
+    paths:
+      - ".github/workflows/free-data.yml"
+      - "download_free_data.py"
+      - "daily_paper.py"
+      - "src/**"
+      - "config/**"
+      - "requirements*.txt"
   pull_request:
-    branches: [feature/strategy-research-v9-4]
+    branches: [main, feature/strategy-research-v9-4]
+    paths:
+      - ".github/workflows/free-data.yml"
+      - "download_free_data.py"
+      - "daily_paper.py"
+      - "src/**"
+      - "config/**"
+      - "requirements*.txt"
+
 permissions:
   contents: read
+
+concurrency:
+  group: free-data-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   validate:
+    # Avoid two 300-stock downloads for the same owned-branch push and PR event.
+    if: github.event_name != 'push' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install free provider
-        run: python -m pip install baostock==0.9.4 pandas
-      - name: Probe anonymous real data
+          cache: pip
+          cache-dependency-path: requirements-free.txt
+      - name: Install free runtime
+        run: python -m pip install -r requirements-free.txt
+      - name: Real free data, candidates and ephemeral Paper validation
         run: |
-          python -u - <<'PY'
-          import socket
-          import baostock as bs
-          socket.setdefaulttimeout(20)
-          login = bs.login()
-          assert login.error_code == "0", login.error_msg
-          def collect(name, result):
-              assert result.error_code == "0", name + ":" + result.error_msg
-              rows = []
-              while result.next():
-                  rows.append(result.get_row_data())
-              assert result.error_code == "0", name + ":" + result.error_msg
-              print(name, result.fields, "rows", len(rows), "first", rows[:1])
-              assert rows, name + ": empty"
-          collect("calendar", bs.query_trade_dates("2026-09-28", "2026-10-15"))
-          collect("members", bs.query_hs300_stocks("2026-09-30"))
-          collect("industry", bs.query_stock_industry("sh.600000", "2026-09-30"))
-          collect("profit", bs.query_profit_data("sh.600000", 2026, 2))
-          collect("growth", bs.query_growth_data("sh.600000", 2026, 2))
-          collect("balance", bs.query_balance_data("sh.600000", 2026, 2))
-          collect("dividend", bs.query_dividend_data("sh.600000", 2026, "operate"))
-          collect("raw", bs.query_history_k_data_plus("sh.600000", "date,code,open,high,low,close,preclose,volume,amount,turn,tradestatus,peTTM,pbMRQ,isST", "2026-09-28", "2026-09-30", adjustflag="3"))
-          bs.logout()
+          python -u daily_paper.py run --provider baostock --refresh \
+            --data "$RUNNER_TEMP/data/free" --signals "$RUNNER_TEMP/free_signal" \
+            --state-dir "$RUNNER_TEMP/paper_free_validation" --lookback-years 2
+          python daily_paper.py status --state-dir "$RUNNER_TEMP/paper_free_validation"
+      - name: Verify free provenance, idempotency and broker isolation
+        run: |
+          python daily_paper.py run --provider baostock \
+            --data "$RUNNER_TEMP/data/free" --signals "$RUNNER_TEMP/free_signal" \
+            --state-dir "$RUNNER_TEMP/paper_free_validation"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          data = json.loads((root / "data/free/data_manifest_v8.json").read_text())
+          report = json.loads((root / "free_signal/signal_report.json").read_text())
+          bundle = json.loads((root / "free_signal/signal_manifest_v9.json").read_text())
+          state = json.loads((root / "paper_free_validation/state.json").read_text())
+          assert data["source"] == "baostock" and data["paper_only"] is True
+          assert bundle["kind"] == "free_paper_signal_bundle"
+          assert state["real_broker_submission"] is False
+          assert json.loads(Path("config/free.example.json").read_text())["live_enabled"] is False
+          summary = ("## 免费数据链路验收\n\n"
+            f"- 数据源：BaoStock匿名接口，无需Tushare Token\n"
+            f"- 完整交易日：{report['signal_date']}\n"
+            f"- 当前沪深300：300只；合格证券：{report['eligible_names']}只\n"
+            f"- 候选组合：{report['selected_names']}只；目标总仓位：{report['gross_target']:.1%}\n"
+            "- 首次运行只建立次交易日订单意图；没有当日成交\n"
+            "- 幂等重跑通过；券商提交关闭\n"
+            "- 只读临时验收，不保存连续账本；历史收益未验证\n"
+            "- 免费版采用季度质量指标、行业中性化、推算主板限制和保守分红税模型\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          print("FREE REAL-DATA PAPER VALIDATION PASSED")
           PY

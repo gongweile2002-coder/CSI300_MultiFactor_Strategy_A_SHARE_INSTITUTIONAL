@@ -39,6 +39,8 @@ data/real/
 data/live/
 data/raw/
 paper/live/
+paper/free/
+data/free/
 
 # Local logs / temp files
 *.log

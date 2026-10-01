@@ -312,6 +312,8 @@ INPUT_FILES = ("prices", "raw_prices", "daily_basic", "fundamentals_raw", "index
 def load_lab_inputs(directory):
     directory = Path(directory)
     manifest, calendar = load_verified_dataset(directory)
+    require(manifest['source']=='tushare',
+            '原版策略对比需要完整历史股票池及原财务口径；免费版用于前向Paper，不能伪装成原版历史回测')
     manifest_hash = sha256(directory/"data_manifest_v8.json")
     require(not manifest.get("fixture_notice"), "合成测试清单不能作为真实研究数据")
     now = pd.Timestamp(manifest["as_of"]+"T18:00:00+08:00")

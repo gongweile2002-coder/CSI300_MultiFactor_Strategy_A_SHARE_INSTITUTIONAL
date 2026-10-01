@@ -2,21 +2,6 @@ name: Manual A-share paper validation
 
 on:
   workflow_dispatch:
-  # Pre-merge real-data validation for this owned feature branch. This is
-  # intentionally branch-scoped: repository secrets are never exposed to PRs
-  # from forks, and the job has read-only repository permissions.
-  push:
-    branches:
-      - feature/live-data-paper-v9-3
-    paths:
-      - ".github/workflows/daily-paper.yml"
-      - "daily_paper.py"
-      - "download_live_data.py"
-      - "update_live_data.py"
-      - "src/**"
-      - "config.example.json"
-      - "config/live.example.json"
-      - "requirements*.txt"
 
 permissions:
   contents: read
@@ -35,32 +20,21 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-
-      - name: Install runtime dependencies
-        run: python -m pip install -r requirements-live.txt
-
-      - name: Require Tushare secret
-        env:
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          cache-dependency-path: requirements-free.txt
+      - name: Install free runtime
+        run: python -m pip install -r requirements-free.txt
+      - name: Validate free-data paper pipeline in ephemeral state
         run: |
-          if [ -z "$TUSHARE_TOKEN" ]; then
-            echo "::error::Repository secret TUSHARE_TOKEN is required."
-            exit 1
-          fi
-
-      - name: Validate real-data paper pipeline in ephemeral state
-        env:
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: |
-          python daily_paper.py run             --refresh             --data "$RUNNER_TEMP/data/live"             --signals "$RUNNER_TEMP/signals"             --state-dir "$RUNNER_TEMP/paper_validation"             --initial-cash 500000
-          python daily_paper.py status             --state-dir "$RUNNER_TEMP/paper_validation"
-
+          python -u daily_paper.py run --provider baostock --refresh \
+            --data "$RUNNER_TEMP/data/free" --signals "$RUNNER_TEMP/free_signal" \
+            --state-dir "$RUNNER_TEMP/paper_free_validation" --lookback-years 2
+          python daily_paper.py status --state-dir "$RUNNER_TEMP/paper_free_validation"
       - name: Confirm broker submission remains disabled
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          cfg = json.loads(Path("config/live.example.json").read_text(encoding="utf-8"))
+          cfg = json.loads(Path("config/free.example.json").read_text(encoding="utf-8"))
           assert cfg.get("live_enabled") is False
-          print("PAPER ONLY: live_enabled=false")
+          print("FREE PAPER ONLY: live_enabled=false; no Tushare secret required")
           PY
