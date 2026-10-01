@@ -8,7 +8,8 @@ import pytest
 
 from daily_paper import _refresh, bind_provider
 from src.baostock_provider import (
-    FREE_CONTRACT, derive_paper_limits, guard_held_adjustments,
+    FREE_CONTRACT, BaoStockDownloader, _BoundedSocket, _bounded_baostock_transport,
+    derive_paper_limits, guard_held_adjustments,
     merge_industry_snapshots, normalize_calendar, normalize_dividends,
     normalize_financials, normalize_industry, normalize_members,
     normalize_prices, result_frame, to_research_prices,
@@ -19,6 +20,64 @@ from src.ops_v9 import atomic_json, audit_dataset, sha256, verify_signal_bundle
 from src.signals_v8 import generate_signals
 from src.strategy_lab_v9_4 import load_lab_inputs
 from test_ops_v9 import market_fixture, NOW, TRADE_NOW
+
+
+class TransportSocket:
+    def __init__(self, data=b''):
+        self.data=data;self.timeout=7.;self.reads=0
+    def send(self, data):return len(data)
+    def gettimeout(self):return self.timeout
+    def settimeout(self, value):self.timeout=value
+    def recv(self, size, *args):
+        self.reads+=1
+        return self.data
+
+
+def test_sdk_eof_cannot_spin_or_silently_finish_a_page(monkeypatch):
+    from baostock.common import context
+    from baostock.util import socketutil
+    sock=TransportSocket()
+    monkeypatch.setattr(context,'default_socket',sock,raising=False)
+    original=socketutil.send_msg
+    with pytest.raises(TradingBlocked,match='消息接收失败'):
+        with _bounded_baostock_transport(20):
+            socketutil.send_msg('synthetic_transport_test')
+    assert sock.reads==1 and sock.timeout==7.
+    assert context.default_socket is sock and socketutil.send_msg is original
+
+
+def test_sdk_transport_success_restores_socket_and_function(monkeypatch):
+    from baostock.common import context
+    from baostock.util import socketutil
+    sock=TransportSocket(b'synthetic_complete_reply')
+    monkeypatch.setattr(context,'default_socket',sock,raising=False)
+    def original(msg):return context.default_socket.recv(8192).decode()
+    monkeypatch.setattr(socketutil,'send_msg',original)
+    with _bounded_baostock_transport(20):
+        assert socketutil.send_msg('test')=='synthetic_complete_reply'
+    assert context.default_socket is sock and sock.timeout==7.
+    assert socketutil.send_msg is original
+
+
+def test_receive_deadline_bounds_a_slow_message(monkeypatch):
+    import src.baostock_provider as provider
+    monkeypatch.setattr(provider.time,'monotonic',lambda:100.)
+    sock=TransportSocket(b'x')
+    bounded=_BoundedSocket(sock,20)
+    monkeypatch.setattr(provider.time,'monotonic',lambda:121.)
+    with pytest.raises(TimeoutError,match='时限'):bounded.recv(8192)
+    assert sock.reads==0
+
+
+def test_anonymous_login_failure_restores_global_socket_timeout():
+    import socket
+    class BrokenLogin:
+        def login(self):
+            return type('Reply',(),{'error_code':'failure','error_msg':'synthetic'})()
+    old=socket.getdefaulttimeout()
+    with pytest.raises(TradingBlocked,match='匿名连接失败'):
+        with BaoStockDownloader(BrokenLogin()):pass
+    assert socket.getdefaulttimeout()==old
 
 
 def bars():

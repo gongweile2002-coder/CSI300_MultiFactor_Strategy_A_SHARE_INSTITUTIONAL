@@ -8,8 +8,10 @@ The provider does not archive historical revisions independently.
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
+from contextlib import contextmanager, nullcontext
 import re
 import socket
+import sys
 import time
 
 import numpy as np
@@ -31,6 +33,53 @@ FREE_CONTRACT = {
     'membership_basis': 'vendor_weekly_snapshots_observed_from_bootstrap_not_exact_intrawweek_changes',
     'financial_vintages': 'pubDate_vendor_latest_quarterly_history_not_independently_archived',
 }
+
+
+class _BoundedSocket:
+    """BaoStock 0.9.4's receiver otherwise loops forever on an EOF socket."""
+    def __init__(self, sock, timeout):
+        self.sock=sock;self.deadline=time.monotonic()+timeout
+
+    def __getattr__(self, name):
+        return getattr(self.sock,name)
+
+    def recv(self, size, *args):
+        remaining=self.deadline-time.monotonic()
+        if remaining<=0:
+            raise TimeoutError('BaoStock消息超过接收时限')
+        self.sock.settimeout(remaining)
+        data=self.sock.recv(size,*args)
+        if not data:
+            raise ConnectionError('BaoStock连接已关闭；不能把未完成分页当作完整数据')
+        return data
+
+
+@contextmanager
+def _bounded_baostock_transport(timeout):
+    # Patch only during this single anonymous downloader session. Every SDK
+    # query and page fetch uses this module function, including login/logout.
+    from baostock.common import context
+    from baostock.util import socketutil
+    original=socketutil.send_msg
+
+    def send(msg):
+        sock=getattr(context,'default_socket',None)
+        require(sock is not None, 'BaoStock没有可用连接')
+        previous_timeout=sock.gettimeout()
+        context.default_socket=_BoundedSocket(sock,timeout)
+        try:
+            received=original(msg)
+            # The SDK catches socket errors and returns None without marking
+            # a failed subsequent page. Raising here prevents silent truncation.
+            require(received is not None and str(received).strip()!='', 'BaoStock消息接收失败；停止本次下载并保留原数据')
+            return received
+        finally:
+            context.default_socket=sock
+            sock.settimeout(previous_timeout)
+
+    socketutil.send_msg=send
+    try:yield
+    finally:socketutil.send_msg=original
 
 
 def ticker_from_code(code):
@@ -263,20 +312,33 @@ class BaoStockDownloader:
             import baostock
             api=baostock
         self.api=api;self.sleep=float(sleep);self.timeout=float(timeout)
+        self.real_sdk=getattr(api,'__name__',None)=='baostock'
         require(self.sleep>=0 and self.timeout>0, '请求节流/超时参数非法')
 
     def __enter__(self):
         self.old_timeout=socket.getdefaulttimeout()
         socket.setdefaulttimeout(self.timeout)
-        r=self.api.login() # documented anonymous session; no user's credentials
-        if str(r.error_code)!='0':
+        self.transport=_bounded_baostock_transport(self.timeout) if self.real_sdk else nullcontext()
+        self.transport.__enter__()
+        try:
+            r=self.api.login() # documented anonymous session; no user's credentials
+            require(str(r.error_code)=='0', 'BaoStock匿名连接失败；需要允许TCP 10030的网络/GitHub runner: '+str(r.error_msg))
+        except BaseException:
+            self.transport.__exit__(*sys.exc_info())
             socket.setdefaulttimeout(self.old_timeout)
-            raise RuntimeError('BaoStock匿名连接失败；需要允许TCP 10030的网络/GitHub runner: '+str(r.error_msg))
+            raise
         return self
 
     def __exit__(self, *args):
-        try:self.api.logout()
-        finally:socket.setdefaulttimeout(self.old_timeout)
+        try:
+            if args[0] is not None and self.real_sdk:
+                from baostock.common import context
+                sock=getattr(context,'default_socket',None)
+                if sock is not None:sock.close()
+            else:self.api.logout()
+        finally:
+            self.transport.__exit__(*args)
+            socket.setdefaulttimeout(self.old_timeout)
 
     def query(self, method, **kwargs):
         result=getattr(self.api,method)(**kwargs)
