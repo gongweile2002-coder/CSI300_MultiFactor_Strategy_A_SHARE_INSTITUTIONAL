@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from .corporate_actions_v10 import normalize_corporate_actions
-from .live_v8 import board, require
+from .live_v8 import TradingBlocked, board, require
 
 
 RAW_FIELDS = 'date,code,open,high,low,close,preclose,volume,amount,turn,tradestatus,peTTM,pbMRQ,isST'
@@ -273,7 +273,9 @@ def derive_paper_limits(raw, metadata, calendar):
     sessions=pd.DatetimeIndex(sorted(pd.to_datetime(calendar.loc[calendar.is_open==1,'date'])))
     rows=[]
     for r in raw.itertuples():
-        if board(r.ticker)!='MAIN' or int(r.is_st)!=0 or r.ticker not in meta.index:
+        try:is_main=board(r.ticker)=='MAIN'
+        except TradingBlocked:is_main=False
+        if not is_main or int(r.is_st)!=0 or r.ticker not in meta.index:
             continue
         name=str(meta.loc[r.ticker,'name'])
         if 'ST' in name.upper() or '退' in name:
@@ -350,6 +352,8 @@ class BaoStockDownloader:
             try:
                 result=getattr(self.api,method)(**kwargs)
                 out=result_frame(result,method)
+                if kwargs.get('code') and not out.empty:
+                    require('code' in out and out.code.eq(kwargs['code']).all(), method+': 返回证券与请求证券不一致')
                 time.sleep(self.sleep)
                 return out
             except BaoStockTransportError:

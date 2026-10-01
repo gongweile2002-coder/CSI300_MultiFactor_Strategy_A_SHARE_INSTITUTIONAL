@@ -80,6 +80,16 @@ def test_anonymous_login_failure_restores_global_socket_timeout():
     assert socket.getdefaulttimeout()==old
 
 
+def test_stock_specific_query_rejects_wrong_security_response():
+    class API:
+        def login(self):return FakeResult(pd.DataFrame())
+        def logout(self):pass
+        def query(self,code):return FakeResult(pd.DataFrame({'code':['sh.600001']}))
+    with BaoStockDownloader(API(),sleep=0) as dl:
+        with pytest.raises(TradingBlocked,match='返回证券与请求证券不一致'):
+            dl.query('query',code='sh.600000')
+
+
 def test_transport_failure_retries_entire_query_not_partial_rows(monkeypatch):
     from baostock.common import context
     import src.baostock_provider as provider
@@ -213,6 +223,17 @@ def test_weekly_industry_intervals_do_not_assign_new_classification_to_past():
                          'industry':['New'],'industryClassification':['CSRC']}),'2026-09-30')
     x=merge_industry_snapshots(old,new)
     assert x.iloc[0].out_date==pd.Timestamp('2026-09-27') and x.iloc[1].in_date==pd.Timestamp('2026-09-28')
+
+
+@pytest.mark.parametrize('ticker',['302132.SZ','689009.SH'])
+def test_unrecognized_board_keeps_quotes_but_gets_no_inferred_limits(ticker):
+    raw=normalize_prices(bars(),pd.DataFrame())
+    raw['ticker']=ticker
+    meta=pd.DataFrame({'ticker':[ticker],'name':['SYNTHETIC_UNSUPPORTED'],
+                       'list_date':['2000-01-01']})
+    cal=pd.DataFrame({'date':pd.bdate_range('2025-01-01','2026-09-30'),'is_open':1})
+    assert derive_paper_limits(raw,meta,cal).empty
+    assert len(raw)==2
 
 
 def test_only_supported_seasoned_main_bars_receive_model_limits():
