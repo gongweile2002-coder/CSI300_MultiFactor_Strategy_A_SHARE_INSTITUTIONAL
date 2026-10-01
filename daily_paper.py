@@ -64,7 +64,7 @@ def main(argv=None):
     run.add_argument("--paper-config", default=str(BASE / "config.example.json"))
     run.add_argument("--risk-config")
     run.add_argument("--initial-cash", type=float, default=500000.0)
-    run.add_argument("--lookback-years", type=int, default=3)
+    run.add_argument("--lookback-years", type=int)
     run.add_argument("--refresh", action="store_true")
 
     status = sub.add_parser("status")
@@ -95,7 +95,8 @@ def main(argv=None):
     state_dir = Path(args.state_dir or BASE / ("paper/free" if free else "paper/live"))
     bind_provider(state_dir, args.provider)
     if args.refresh:
-        _refresh(data_dir, args.lookback_years, state_dir, args.provider)
+        lookback=args.lookback_years if args.lookback_years is not None else (1 if free else 3)
+        _refresh(data_dir, lookback, state_dir, args.provider)
 
     manifest, _ = load_verified_dataset(data_dir)
     if manifest["source"] != args.provider:

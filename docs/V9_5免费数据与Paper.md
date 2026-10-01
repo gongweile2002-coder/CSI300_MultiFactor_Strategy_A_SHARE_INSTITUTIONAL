@@ -16,6 +16,8 @@ python daily_paper.py status
 
 收盘后重复执行第二条命令即可刷新。网络需要支持 BaoStock 的 TCP 10030 连接；如果本地网络不支持，可先查看 GitHub 的真实数据验收。
 
+首次默认拉取一年行情，覆盖126交易日动量、20日流动性与120日基准均线；已有记录继续保留，行情随后按重叠区间增量更新。需要更长行情时可添加`--lookback-years 2`。证券/行业资料按所需证券读取，避免全市场分页；连接意外中断时最多完整重试该接口两次，不使用未收完的分页数据。
+
 - `data/free/`：真实行情、财报、成分/行业快照、日历、分红和带哈希的数据清单。
 - `outputs/free_signal/targets.csv`：当日候选组合。
 - `outputs/free_signal/factor_audit.csv`：因子与公告日审计。

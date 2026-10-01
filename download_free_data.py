@@ -54,9 +54,9 @@ def _merge(old,new,keys):
     return x.drop_duplicates(keys,keep='last').sort_values(keys).reset_index(drop=True)
 
 
-def download_free_dataset(directory, *, now=None, as_of=None, lookback_years=2,
+def download_free_dataset(directory, *, now=None, as_of=None, lookback_years=1,
                           financial_quarters=2, sleep=.05, state_dir=None, api=None):
-    require(lookback_years>=2 and financial_quarters>=2, '免费数据至少两年行情、两个已结束财报季度')
+    require(lookback_years>=1 and financial_quarters>=2, '免费数据至少一年行情、两个已结束财报季度')
     directory=Path(directory).resolve()
     directory.mkdir(parents=True,exist_ok=True)
     now=pd.Timestamp(now) if now is not None else pd.Timestamp.now(tz='Asia/Shanghai')
@@ -85,14 +85,20 @@ def download_free_dataset(directory, *, now=None, as_of=None, lookback_years=2,
             members=_merge(_read(directory,'index_membership.csv',current.columns),current,['effective_date','ticker'])
             names=set(members.ticker)|paper_required_tickers(state_dir)
             tickers=sorted(names)
-            basic=dl.query('query_stock_basic')
+            basic_frames=[];industry_frames=[]
+            for i,ticker in enumerate(tickers,1):
+                code=code_from_ticker(ticker)
+                basic_frames.append(dl.query('query_stock_basic',code=code))
+                industry_frames.append(dl.query('query_stock_industry',code=code,date=str(asof.date())))
+                if i%50==0 or i==len(tickers):print(f'免费证券资料: {i}/{len(tickers)}',flush=True)
+            basic=pd.concat(basic_frames,ignore_index=True)
             require({'code','code_name','ipoDate','outDate'}<=set(basic), '证券基础资料缺字段')
             basic=basic[basic.code.str.match(r'^(sh|sz)\.\d{6}$')].copy()
             basic['ticker']=basic.code.map(ticker_from_code)
             meta=basic[basic.ticker.isin(names)].rename(columns={'code_name':'name','ipoDate':'list_date','outDate':'delist_date'})
             meta=meta[['ticker','name','list_date','delist_date']].copy()
             require(not meta.ticker.duplicated().any() and names<=set(meta.ticker), '证券资料遗漏当前/历史/持仓证券')
-            industry_now=normalize_industry(dl.query('query_stock_industry',date=str(asof.date())),asof)
+            industry_now=normalize_industry(pd.concat(industry_frames,ignore_index=True),asof)
             industry_now=industry_now[industry_now.ticker.isin(names)].copy()
             industry=merge_industry_snapshots(_read(directory,'industry_membership.csv',industry_now.columns),industry_now)
 
@@ -101,7 +107,8 @@ def download_free_dataset(directory, *, now=None, as_of=None, lookback_years=2,
             for i,ticker in enumerate(tickers,1):
                 code=code_from_ticker(ticker)
                 previous=old_raw[old_raw.ticker==ticker].copy() if not old_raw.empty else pd.DataFrame()
-                since=start if previous.empty else max(start,pd.to_datetime(previous.date).max()-pd.Timedelta(days=7))
+                expand=old_manifest is not None and lookback_years>old_manifest.get('price_lookback_years',lookback_years)
+                since=start if previous.empty or expand else max(start,pd.to_datetime(previous.date).max()-pd.Timedelta(days=7))
                 bars=dl.query('query_history_k_data_plus',code=code,fields=RAW_FIELDS,
                               start_date=str(since.date()),end_date=str(asof.date()),frequency='d',adjustflag='3')
                 factors=dl.query('query_adjust_factor',code=code,start_date='1990-01-01',end_date=str(asof.date()))
@@ -171,6 +178,7 @@ def download_free_dataset(directory, *, now=None, as_of=None, lookback_years=2,
                   'created_at':now.isoformat(),'ticker_count':members.ticker.nunique(),'market_ticker_count':len(tickers),
                   'amount_unit':'CNY','volume_unit':'share','st_history_status':'vendor_daily_isST',
                   'refresh_mode':'incremental_bars_refresh_quarterly_financials_and_dividends',
+                  'price_lookback_years':lookback_years,
                   'financial_quarters':financial_quarters,'financial_universe':'supported_non_ST_MAIN_positive_PE_PB',
                   'history_available_from':old_manifest.get('history_available_from',old_manifest['as_of']) if old_manifest else str(asof.date()),
                   'index_weight_basis':'membership_marker_only_not_actual_index_weight',
@@ -201,7 +209,7 @@ def main(argv=None):
     p=argparse.ArgumentParser(description='BaoStock匿名免费数据；独立免费版Paper口径')
     p.add_argument('--output',default=str(BASE/'data/free'))
     p.add_argument('--as-of',help='冻结历史下载；日常Paper仍要求最近完整交易日')
-    p.add_argument('--lookback-years',type=int,default=2)
+    p.add_argument('--lookback-years',type=int,default=1)
     p.add_argument('--financial-quarters',type=int,default=2)
     p.add_argument('--sleep',type=float,default=.05)
     p.add_argument('--paper-state-dir')

@@ -27,7 +27,7 @@ jobs:
         run: |
           python -u daily_paper.py run --provider baostock --refresh \
             --data "$RUNNER_TEMP/data/free" --signals "$RUNNER_TEMP/free_signal" \
-            --state-dir "$RUNNER_TEMP/paper_free_validation" --lookback-years 2
+            --state-dir "$RUNNER_TEMP/paper_free_validation" --lookback-years 1
           python daily_paper.py status --state-dir "$RUNNER_TEMP/paper_free_validation"
       - name: Confirm broker submission remains disabled
         run: |

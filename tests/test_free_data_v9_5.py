@@ -8,7 +8,7 @@ import pytest
 
 from daily_paper import _refresh, bind_provider
 from src.baostock_provider import (
-    FREE_CONTRACT, BaoStockDownloader, _BoundedSocket, _bounded_baostock_transport,
+    FREE_CONTRACT, BaoStockDownloader, BaoStockTransportError, _BoundedSocket, _bounded_baostock_transport,
     derive_paper_limits, guard_held_adjustments,
     merge_industry_snapshots, normalize_calendar, normalize_dividends,
     normalize_financials, normalize_industry, normalize_members,
@@ -39,7 +39,7 @@ def test_sdk_eof_cannot_spin_or_silently_finish_a_page(monkeypatch):
     sock=TransportSocket()
     monkeypatch.setattr(context,'default_socket',sock,raising=False)
     original=socketutil.send_msg
-    with pytest.raises(TradingBlocked,match='消息接收失败'):
+    with pytest.raises(BaoStockTransportError,match='消息接收失败'):
         with _bounded_baostock_transport(20):
             socketutil.send_msg('synthetic_transport_test')
     assert sock.reads==1 and sock.timeout==7.
@@ -78,6 +78,36 @@ def test_anonymous_login_failure_restores_global_socket_timeout():
     with pytest.raises(TradingBlocked,match='匿名连接失败'):
         with BaoStockDownloader(BrokenLogin()):pass
     assert socket.getdefaulttimeout()==old
+
+
+def test_transport_failure_retries_entire_query_not_partial_rows(monkeypatch):
+    from baostock.common import context
+    import src.baostock_provider as provider
+    monkeypatch.setattr(provider.time,'sleep',lambda _:None)
+    class Socket:
+        def close(self):pass
+    monkeypatch.setattr(context,'default_socket',Socket(),raising=False)
+    class PartialPage:
+        error_code='0';error_msg='SYNTHETIC';fields=['value'];count=0
+        def next(self):
+            self.count+=1
+            if self.count>1:raise BaoStockTransportError('synthetic disconnected page')
+            return True
+        def get_row_data(self):return ['partial_must_be_discarded']
+    class API:
+        __name__='baostock';calls=0;logins=0
+        def login(self):
+            self.logins+=1
+            return FakeResult(pd.DataFrame())
+        def logout(self):pass
+        def query(self):
+            self.calls+=1
+            return PartialPage() if self.calls==1 else FakeResult(pd.DataFrame({'value':['complete_retry']}))
+    api=API()
+    with BaoStockDownloader(api,sleep=0) as dl:
+        out=dl.query('query')
+    assert out.value.tolist()==['complete_retry']
+    assert api.calls==2 and api.logins==2
 
 
 def bars():
@@ -298,11 +328,11 @@ class FakeAPI:
         return FakeResult(pd.DataFrame({'calendar_date':dates.strftime('%Y-%m-%d'),'is_trading_day':opened}))
     def query_hs300_stocks(self,date):
         return FakeResult(pd.DataFrame({'code':self.codes,'updateDate':'2026-09-28','code_name':'SYNTHETIC'}))
-    def query_stock_basic(self):
-        return FakeResult(pd.DataFrame({'code':self.codes,'code_name':'SYNTHETIC','ipoDate':'2000-01-01','outDate':''}))
-    def query_stock_industry(self,date):
-        return FakeResult(pd.DataFrame({'code':self.codes,'updateDate':'2026-09-28',
-            'industry':[f'SYNTHETIC{i%5}' for i in range(300)],'industryClassification':'SYNTHETIC'}))
+    def query_stock_basic(self,code):
+        return FakeResult(pd.DataFrame({'code':[code],'code_name':'SYNTHETIC','ipoDate':'2000-01-01','outDate':''}))
+    def query_stock_industry(self,code,date):
+        return FakeResult(pd.DataFrame({'code':[code],'updateDate':'2026-09-28',
+            'industry':[f'SYNTHETIC{self.codes.index(code)%5}'],'industryClassification':'SYNTHETIC'}))
     def query_history_k_data_plus(self,code,fields,start_date,end_date,**kwargs):
         dates=pd.bdate_range(end='2026-09-30',periods=190)
         dates=dates[(dates>=pd.Timestamp(start_date))&(dates<=pd.Timestamp(end_date))]

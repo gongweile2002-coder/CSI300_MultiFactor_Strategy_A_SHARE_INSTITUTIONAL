@@ -35,6 +35,10 @@ FREE_CONTRACT = {
 }
 
 
+class BaoStockTransportError(ConnectionError):
+    pass
+
+
 class _BoundedSocket:
     """BaoStock 0.9.4's receiver otherwise loops forever on an EOF socket."""
     def __init__(self, sock, timeout):
@@ -71,7 +75,8 @@ def _bounded_baostock_transport(timeout):
             received=original(msg)
             # The SDK catches socket errors and returns None without marking
             # a failed subsequent page. Raising here prevents silent truncation.
-            require(received is not None and str(received).strip()!='', 'BaoStock消息接收失败；停止本次下载并保留原数据')
+            if received is None or str(received).strip()=='':
+                raise BaoStockTransportError('BaoStock消息接收失败；停止本次下载并保留原数据')
             return received
         finally:
             context.default_socket=sock
@@ -341,7 +346,18 @@ class BaoStockDownloader:
             socket.setdefaulttimeout(self.old_timeout)
 
     def query(self, method, **kwargs):
-        result=getattr(self.api,method)(**kwargs)
-        out=result_frame(result,method)
-        time.sleep(self.sleep)
-        return out
+        for attempt in range(3):
+            try:
+                result=getattr(self.api,method)(**kwargs)
+                out=result_frame(result,method)
+                time.sleep(self.sleep)
+                return out
+            except BaoStockTransportError:
+                if not self.real_sdk or attempt==2:raise
+                from baostock.common import context
+                sock=getattr(context,'default_socket',None)
+                if sock is not None:sock.close()
+                print(f'免费接口断线：{method}；重新匿名连接后完整重试 {attempt+1}/2',flush=True)
+                time.sleep(attempt+1)
+                r=self.api.login()
+                require(str(r.error_code)=='0', 'BaoStock匿名重连失败: '+str(r.error_msg))
